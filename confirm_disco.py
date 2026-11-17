@@ -1,152 +1,163 @@
-"""Frozen-model confirmation on raw rows 200000:300000. No training or tuning."""
+"""Separate protocol freeze and reserved-event replay/eligible independent evaluation.
+
+The previously evaluated raw rows 200000:300000 are historical exploratory data.
+This command never calls them fresh. Unknown exposure cannot qualify as unused.
+"""
 import argparse
-import csv
-import hashlib
-import json
 from pathlib import Path
+import shutil
+import tempfile
+import joblib
 import numpy as np
 import torch
-from scipy.spatial.distance import jensenshannon
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from study import ROOT, extract, region, score_model, BaselineEFPNetwork
+from artifacts import verify_run, verify, complete, writer_lock
+from provenance import read_json, atomic_json, identity, file_hash, source_identity
+from exposure import load_ledger, eligible, record_access
+from study import fit_name, verified_data, reload_scores
+from protocol import FINAL_MODELS, CUTS, PRESCRIBED_LAMBDA
+from metrics import metrics_for, region
+from bootstrap import paired, measures
 
-SEEDS=[11,22,33]
-FRACTIONS=[.005,.01]
-MODELS=['mass_mlp','disco','efp_mlp']
+MODELS = list(FINAL_MODELS)
 
 
-def files(seed,fraction,name):
-    if name=='disco':
-        folder=ROOT/'results_tuning'/f'seed{seed}_f{fraction:g}_lambda0.003'
-        threshold=json.loads((folder/'metrics.json').read_text())['threshold']
+def freeze(run, destination):
+    run = Path(run)
+    protocol = verify_run(run)
+    from report_study import audit_run, validate_output
+    audit_run(run)
+    validate_output(run, destination)
+    splits = read_json(run/'splits.json')
+    config = protocol['identity']['config']
+    files = {}
+    for seed in config['seeds']:
+        for fraction in config['fractions']:
+            for model in MODELS:
+                name = fit_name(seed, fraction, model)
+                path = run/'fits'/name
+                marker = verify(path, protocol['run_id'])
+                meta = marker['metadata']
+                expected_strength = .003 if model == 'sideband_0.003' else 0.
+                if meta['strength'] != expected_strength or meta['model'] != model:
+                    raise ValueError('Model strength or identity mismatch')
+                files[name] = file_hash(path/'complete.json')
+    frozen = dict(version=2, run_id=protocol['run_id'], source=source_identity(),
+                  dataset_sha256=protocol['identity']['dataset_sha256'], split_sha256=identity(splits),
+                  rows=splits['seeds'][str(config['seeds'][0])]['final'], files=files,
+                  seeds=config['seeds'], fractions=config['fractions'], models=MODELS,
+                  prescribed_lambda=.003, lambda_history=protocol['identity']['lambda_history'],
+                  bootstrap=protocol['identity']['bootstrap'], comparison='SIC ratio >=0.90; JS ratio <=0.80',
+                  cuts=list(CUTS), mode='synthetic_smoke' if config['smoke'] else 'exploratory_replay',
+                  limitation='No unused sample is inferred from row number. Historical rows 200000:300000 were previously evaluated.')
+    payload = dict(freeze_id=identity(frozen), protocol=frozen)
+    destination = Path(destination)
+    if destination.exists():
+        if read_json(destination) != payload:
+            raise ValueError('Frozen protocol exists with different identity')
     else:
-        folder=ROOT/'results_study'/f'seed{seed}_f{fraction:g}_{name}'
-        rows=json.loads((folder/'metrics.json').read_text())
-        threshold=next(r['threshold'] for r in rows if r['split']=='validation' and r['cut']==.05)
-    return folder,float(threshold)
+        atomic_json(destination, payload)
+    return payload
 
 
-def predict(data,folder,name):
-    with np.load(folder/'preprocessing.npz') as p:
-        raw=np.log(np.maximum(data['x'],1e-12))
-        if name!='efp_mlp': raw=np.column_stack((raw,np.log1p(np.maximum(data['jet_mass'],0))))
-        active=p['active'];x=((raw[:,active]-p['mean'][active])/p['scale'][active]).astype('float32')
-    model=BaselineEFPNetwork(x.shape[1])
-    model.load_state_dict(torch.load(folder/'model.pt',map_location='cpu',weights_only=True))
-    return score_model(model,x)
+def load_model(folder, metadata, data):
+    return reload_scores(folder, metadata, data)
 
 
-def measures(mass,truth,selected):
-    bg=truth==0;sr=region(mass)==1;signal=(truth==1)&sr
-    eb=selected[bg&sr].mean();es=selected[signal].mean()
-    a=np.histogram(mass[bg],np.linspace(3100,3900,17))[0]
-    b=np.histogram(mass[bg&selected],np.linspace(3100,3900,17))[0]
-    js=float(jensenshannon(a,b,base=2)**2) if b.sum() else np.nan
-    return float(es/np.sqrt(eb)) if eb>0 else np.nan,js,float(es),float(eb)
+def evaluate(run, frozen_path, output, independent=False, ledger_path=None):
+    run, output = Path(run), Path(output)
+    protocol = verify_run(run)
+    payload = read_json(frozen_path)
+    frozen = payload['protocol']
+    if (payload['freeze_id'] != identity(frozen) or frozen['run_id'] != protocol['run_id']
+            or frozen['source'] != source_identity() or frozen['split_sha256'] != file_hash(run/'splits.json')):
+        raise ValueError('Frozen protocol identity changed')
+    from report_study import audit_run, validate_output
+    audit_run(run)
+    validate_output(run, output)
+    config = protocol['identity']['config']
+    dataset_hash = frozen['dataset_sha256']
+    canonical_ledger = Path(protocol['ledger_path']).resolve()
+    if ledger_path is not None and Path(ledger_path).resolve() != canonical_ledger:
+        raise ValueError('Every evaluation must use the recorded dataset ledger; alternate ledgers are forbidden')
+    ledger_path = canonical_ledger
+    if independent:
+        if config['smoke'] or ledger_path is None:
+            raise ValueError('Independent mode requires real data and a source-audited exposure ledger')
+        ledger = load_ledger(ledger_path, dataset_hash)
+        eligible(ledger, frozen['rows'])
+    # Every model/threshold verified before opening candidate final features.
+    for name, digest in frozen['files'].items():
+        if file_hash(run/'fits'/name/'complete.json') != digest:
+            raise ValueError('Frozen model artifacts changed')
+    with writer_lock(output.parent/(output.name+'.lock')):
+        if output.exists():
+            raise ValueError('Evaluation output exists; preserve it and choose a new output')
+        record_access(ledger_path, dataset_hash, frozen['rows'],
+                      'independent_evaluation_attempt' if independent else 'exploratory_replay_attempt', payload['freeze_id'],
+                      require_unused=independent)
+        data = verified_data(protocol)
+        lookup = {int(row): i for i, row in enumerate(data['row'])}
+        try:
+            ids = np.array([lookup[row] for row in frozen['rows']])
+        except KeyError as error:
+            raise ValueError('Reserved rows missing from verified cache') from error
+        data = {k: v[ids] for k, v in data.items()}
+        # Signal outside SR never enters sensitivity/evaluation sample.
+        keep = (data['truth'] == 0) | (region(data['mass']) == 1)
+        data = {k: v[keep] for k, v in data.items()}
+        temporary = Path(tempfile.mkdtemp(dir=output.parent, prefix='.'+output.name))
+        try:
+            records, comparisons = [], []
+            for fraction in frozen['fractions']:
+                decisions = {}
+                for seed in frozen['seeds']:
+                    for name in MODELS:
+                        folder = run/'fits'/fit_name(seed, fraction, name)
+                        metadata = verify(folder, protocol['run_id'])['metadata']
+                        score = load_model(folder, metadata, data)
+                        cuts = read_json(folder/'thresholds.json')
+                        for cut in frozen['cuts']:
+                            threshold = cuts[str(cut)]
+                            row = dict(seed=seed, fraction=fraction, model=name, cut=cut, split='final_replay' if not independent else 'final', threshold=threshold)
+                            row.update(metrics_for(data, np.arange(len(score)), score, threshold, seed+300, config['permutations']))
+                            records.append(row)
+                        decisions[(seed, name)] = score > cuts['0.05']
+                        np.savez_compressed(temporary/f'{fit_name(seed, fraction, name)}.npz', **data, score=score, threshold=cuts['0.05'])
+                rule = frozen['bootstrap']
+                comparisons.append(dict(fraction=fraction, **paired(data['mass'], data['truth'], decisions,
+                                          frozen['seeds'], rule['replicates'], rule['seed'])))
+            atomic_json(temporary/'metrics.json', records)
+            atomic_json(temporary/'comparisons.json', comparisons)
+            atomic_json(temporary/'protocol.json', payload)
+            atomic_json(temporary/'interpretation.json', dict(mode='independent_event_check' if independent else frozen['mode'],
+                       limitation='Event-disjoint simulation check cannot establish independent generator/systematic behavior'))
+            complete(temporary, protocol['run_id'], dict(freeze_id=payload['freeze_id']))
+            verify(temporary, protocol['run_id'])
+            temporary.rename(output)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+    return output
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--check-only',action='store_true')
-    args=parser.parse_args();torch.set_num_threads(2)
-    selection=json.loads((ROOT/'results_tuning/selection.json').read_text())
-    if selection['completed_fits']!=24 or selection['selected_lambda']!=.003:
-        raise ValueError('Expected completed tuning selecting lambda=0.003')
-    source=json.loads((ROOT/'results_study/config.json').read_text())
-    spec=argparse.Namespace(data=Path(source['data']),events=100000,start_row=200000,degree=4,chunk_size=128)
-    output=ROOT/'results_confirmation';output.mkdir(exist_ok=True)
-    fingerprints={}
-    for seed in SEEDS:
-        for fraction in FRACTIONS:
-            for name in MODELS:
-                folder,threshold=files(seed,fraction,name)
-                for filename in ['model.pt','preprocessing.npz','metrics.json']:
-                    path=folder/filename;fingerprints[str(path.relative_to(ROOT))]=hashlib.sha256(path.read_bytes()).hexdigest()
-    protocol=dict(source_start=200000,source_stop=300000,seeds=SEEDS,fractions=FRACTIONS,lambda_value=.003,
-        rule='Mean SIC ratio >=0.90 and mean JS ratio <=0.80 at both fractions',
-        bootstrap='300 paired stratified event bootstrap replicates; models/seeds fixed; 95% percentile intervals',
-        files=fingerprints,source_size=spec.data.stat().st_size,source_mtime=spec.data.stat().st_mtime_ns,
-        code={n:hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in ['confirm_disco.py','study.py','phase1.py']})
-    encoded=json.dumps(protocol,indent=2,sort_keys=True);path=output/'protocol.json'
-    if path.exists() and path.read_text()!=encoded: raise ValueError('Frozen protocol/artifacts changed; do not overwrite confirmation')
-    if args.check_only:
-        # Verify inference round trip against already-used validation outputs, never fresh data.
-        with np.load(ROOT/'feature_cache/jets_ee22264f96aec21c.npz') as old:
-            old_rows=old['row']
-            for seed in SEEDS:
-                for fraction in FRACTIONS:
-                    for name in MODELS:
-                        folder,_=files(seed,fraction,name)
-                        archive=folder/('validation.npz' if name=='disco' else 'predictions.npz')
-                        with np.load(archive) as saved:
-                            rowkey,scorekey=('rows','score') if name=='disco' else ('validation_rows','validation_score')
-                            rows=saved[rowkey][:32];expected=saved[scorekey][:32]
-                        ids=np.searchsorted(old_rows,rows)
-                        assert np.array_equal(old_rows[ids],rows)
-                        data={k:old[k][ids] for k in ['x','jet_mass']}
-                        assert np.allclose(predict(data,folder,name),expected,atol=2e-6),str(folder)
-        print('All 18 model reload checks passed; no fresh events evaluated.');return
-    path.write_text(encoded)
-    # Separate 10k-row caches allow interrupted extraction to resume cheaply.
-    blocks=[]
-    for start in range(200000,300000,10000):
-        spec.start_row=start;spec.events=10000
-        blocks.append(extract(spec))
-    data={k:np.concatenate([b[k] for b in blocks]) for k in blocks[0]}
-    assert data['row'].min()>=200000 and data['row'].max()<300000
-    keep=(data['truth']==0)|(region(data['mass'])==1)
-    data={k:v[keep] for k,v in data.items()}
-    mass,truth=data['mass'],data['truth'];results=[];decisions={};confirmation=[]
-    for fraction in FRACTIONS:
-        for seed in SEEDS:
-            for name in MODELS:
-                folder,threshold=files(seed,fraction,name)
-                print(f'Evaluating frozen {name}, seed {seed}, training fraction {fraction}',flush=True)
-                score=predict(data,folder,name);selected=score>threshold
-                decisions[(fraction,seed,name)]=selected
-                sic,js,es,eb=measures(mass,truth,selected)
-                results.append(dict(fraction=fraction,seed=seed,model=name,sic=sic,js=js,signal_efficiency=es,background_efficiency=eb))
-                np.savez_compressed(output/f'f{fraction:g}_seed{seed}_{name}.npz',rows=data['row'],mass=mass,truth=truth,score=score,threshold=threshold)
-        # Paired event bootstrap: SAME resampled rows for both methods and all seeds.
-        point={name:np.mean([[r['sic'],r['js']] for r in results if r['fraction']==fraction and r['model']==name],axis=0) for name in MODELS}
-        ratios=point['disco']/point['mass_mlp'];samples=[]
-        strata=[np.flatnonzero((truth==label)&(region(mass)==sr)) for label,sr in [(0,0),(0,1),(1,1)]]
-        rng=np.random.default_rng(773)
-        for _ in range(300):
-            ids=np.concatenate([rng.choice(group,len(group),replace=True) for group in strata])
-            means=[]
-            for name in ['mass_mlp','disco']:
-                means.append(np.mean([measures(mass[ids],truth[ids],decisions[(fraction,s,name)][ids])[:2] for s in SEEDS],axis=0))
-            samples.append(means[1]/means[0])
-        low,high=np.quantile(samples,[.025,.975],axis=0)
-        confirmation.append(dict(fraction=fraction,sic_ratio=float(ratios[0]),js_ratio=float(ratios[1]),
-            sic_interval=[float(low[0]),float(high[0])],js_interval=[float(low[1]),float(high[1])],
-            point_targets_met=bool(ratios[0]>=.9 and ratios[1]<=.8),
-            intervals_clear_targets=bool(low[0]>=.9 and high[1]<=.8)))
-        fig,ax=plt.subplots(figsize=(10,5));bins=np.linspace(3100,3900,17);bg=truth==0
-        n=np.histogram(mass[bg],bins)[0]
-        for name in MODELS:
-            rates=np.array([np.histogram(mass[bg&decisions[(fraction,s,name)]],bins)[0]/n for s in SEEDS])
-            ax.errorbar((bins[1:]+bins[:-1])/2,rates.mean(0),yerr=rates.std(0),fmt='.-',label=name)
-        ax.axvspan(3300,3700,color='gray',alpha=.1);ax.axhline(.05,color='black',ls=':')
-        ax.set(xlabel='Dijet mass [GeV]',ylabel='Background selection efficiency',title=f'Fresh confirmation; training signal {fraction:.1%}; error bars: seed SD')
-        ax.legend();fig.tight_layout();fig.savefig(output/f'efficiency_f{fraction:g}.png',dpi=160);plt.close(fig)
-    with (output/'metrics.csv').open('w',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=list(results[0]));writer.writeheader();writer.writerows(results)
-    (output/'confirmation.json').write_text(json.dumps(confirmation,indent=2,allow_nan=False))
-    lines=['# Fresh-data confirmation',f'Raw source rows: 200000-299999. Selected evaluation events: {len(mass)}.',
-        'Frozen lambda=0.003; no training, checkpoint selection or threshold tuning on this sample.',
-        '', '| Training signal | SIC retained (95% interval) | JS ratio (95% interval) | Point targets met | Intervals clear targets |',
-        '|---|---|---|---|---|']
-    for r in confirmation:
-        lines.append(f'| {r["fraction"]:.1%} | {r["sic_ratio"]:.3f} {r["sic_interval"]} | {r["js_ratio"]:.3f} {r["js_interval"]} | {r["point_targets_met"]} | {r["intervals_clear_targets"]} |')
-    lines+=['','Both signal fractions must meet the point targets for the predefined empirical criterion.',
-        'Intervals are paired stratified event-bootstrap intervals conditional on the three frozen models and event class/region counts. They do not include training or simulator uncertainty and are not simultaneous confidence bands.',
-        'The same fresh events are shared across models and fractions. Do not treat seeds as independent test samples.',
-        'Raw JS contains finite-count bias. A lower JS is not proof of independence or absence of a fake resonance.',
-        'If confirmation fails, report failure; do not retune on these events. See metrics.csv for the EFP-only reference.']
-    (output/'REPORT.md').write_text('\n'.join(lines));print(f'Done: {output/"REPORT.md"}')
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest='command', required=True)
+    f = sub.add_parser('freeze')
+    f.add_argument('--run', type=Path, required=True)
+    f.add_argument('--output', type=Path, required=True)
+    e = sub.add_parser('evaluate')
+    e.add_argument('--run', type=Path, required=True)
+    e.add_argument('--freeze', type=Path, required=True)
+    e.add_argument('--output', type=Path, required=True)
+    e.add_argument('--independent', action='store_true')
+    e.add_argument('--ledger', type=Path)
+    args = p.parse_args()
+    if args.command == 'freeze':
+        freeze(args.run, args.output)
+    else:
+        evaluate(args.run, args.freeze, args.output, args.independent, args.ledger)
 
-if __name__=='__main__': main()
+
+if __name__ == '__main__':
+    main()

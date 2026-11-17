@@ -1,0 +1,248 @@
+{
+  "assessment": {
+    "actual_records": 18,
+    "assessment": "prescribed_fixed_lambda",
+    "candidates": [
+      {
+        "eligible": false,
+        "lambda_value": 0.003,
+        "regimes": [
+          {
+            "denominator": 3,
+            "expected_seeds": [
+              11,
+              22,
+              33
+            ],
+            "fraction": 0.0,
+            "js_ratio": 1.0655376776044074,
+            "leave_one_seed_out": [
+              {
+                "js_ratio": 1.108678882913416,
+                "omitted_seed": 11,
+                "sic_ratio": 0.9607689228305228
+              },
+              {
+                "js_ratio": 1.093666213700721,
+                "omitted_seed": 22,
+                "sic_ratio": 0.9607689228305228
+              },
+              {
+                "js_ratio": 0.9956195469345681,
+                "omitted_seed": 33,
+                "sic_ratio": null
+              }
+            ],
+            "qualifies": false,
+            "sic_retained": 0.9607689228305228
+          },
+          {
+            "denominator": 3,
+            "expected_seeds": [
+              11,
+              22,
+              33
+            ],
+            "fraction": 0.005,
+            "js_ratio": 0.9153852345605278,
+            "leave_one_seed_out": [
+              {
+                "js_ratio": 0.8772582631773992,
+                "omitted_seed": 11,
+                "sic_ratio": null
+              },
+              {
+                "js_ratio": 0.9858325077357618,
+                "omitted_seed": 22,
+                "sic_ratio": null
+              },
+              {
+                "js_ratio": 0.8773383020982379,
+                "omitted_seed": 33,
+                "sic_ratio": null
+              }
+            ],
+            "qualifies": false,
+            "sic_retained": null
+          },
+          {
+            "denominator": 3,
+            "expected_seeds": [
+              11,
+              22,
+              33
+            ],
+            "fraction": 0.01,
+            "js_ratio": 0.7095571977304617,
+            "leave_one_seed_out": [
+              {
+                "js_ratio": 0.6720873048693914,
+                "omitted_seed": 11,
+                "sic_ratio": 0.9636241116594315
+              },
+              {
+                "js_ratio": 0.8240780778967888,
+                "omitted_seed": 22,
+                "sic_ratio": 0.9636241116594315
+              },
+              {
+                "js_ratio": 0.6590319691447056,
+                "omitted_seed": 33,
+                "sic_ratio": null
+              }
+            ],
+            "qualifies": true,
+            "sic_retained": 0.9636241116594315
+          }
+        ]
+      }
+    ],
+    "expected_records": 18,
+    "input_sha256": "743c3c34cb5ce08c075edf64e2a940b9da40aa5793188963977c7a6e00330362",
+    "interpretation": "Exploratory paired comparison on tuning events; event sample shared across seeds.",
+    "missing_keys": [],
+    "new_fits": 0,
+    "prescribed_lambda": 0.003,
+    "reuse": "Existing verified fits referenced exactly once; not additional independent evidence",
+    "run_id": "bdc6552f4f1c04e643e188456bf34c1badeff280dc3704cc2d19142f092b1527",
+    "status": "complete",
+    "targets_met": false,
+    "unique_fits": 45
+  },
+  "audit": {
+    "fits": 45,
+    "independent_calculation": {
+      "atol": 1e-12,
+      "calculation": "Independent NumPy/rank-sum implementation of thresholds, AUC, efficiencies, SIC, JS, permutation p, dCor and local counts",
+      "records": 180,
+      "rtol": 1e-10,
+      "status": "passed"
+    },
+    "input_sha256": {
+      "fits/seed11_f0.005_efp_mlp/complete.json": "7b1cf8252dc829de6b2b85555ae292da748e32b79d5cc72723ce7c116bd3059a",
+      "fits/seed11_f0.005_mass_gbdt/complete.json": "b12d332d5c447ed9634febe1643fbd383922ce926f68ab974f767ed2a2c9a39b",
+      "fits/seed11_f0.005_mass_mlp/complete.json": "611048192000c6b9ac54c6dee3c36aaa88ffa49b761faa56b0b82e99ee977d55",
+      "fits/seed11_f0.005_oracle_0.003/complete.json": "84c24918c7f4eacd9de83bbb2689b8882f0b59fbfdb9ff1c1212f1af42f4e7d1",
+      "fits/seed11_f0.005_sideband_0.003/complete.json": "4efe2dc38101d161a6da382ba3af5792221283882e4a084a996daf3b771ac423",
+      "fits/seed11_f0.01_efp_mlp/complete.json": "3aefff9872f46028b1c60f9509bfb2261f955ca8a647dd1abef57456b5273c96",
+      "fits/seed11_f0.01_mass_gbdt/complete.json": "1721a89dcf72be600ef06f7fdb5e97dcd5f4aebaf95148b8477284ace05573ee",
+      "fits/seed11_f0.01_mass_mlp/complete.json": "a2742520b5bd77a4a2999b61f634224551a67adefb98ec1c64385e8b102fe60b",
+      "fits/seed11_f0.01_oracle_0.003/complete.json": "63ff0d2f2d00a7b4ef57c7cca8a3ea73e07d69197a9499dad26b28cd0b78edba",
+      "fits/seed11_f0.01_sideband_0.003/complete.json": "4f0a92b0b150cf1f9289cb0ef9d30b4868ea82058df2a356228e282bf48138d8",
+      "fits/seed11_f0_efp_mlp/complete.json": "0b91bb280d11c8544bbbc6e9cba3edbcfaf49c5eb7c8ff9ff9387caeabebb744",
+      "fits/seed11_f0_mass_gbdt/complete.json": "5decc9af6e35ae615f7390b7714ff21d6d6894e39abcb794c05b75099aa06b61",
+      "fits/seed11_f0_mass_mlp/complete.json": "620a1844c88a3f71eb52ce015dd937d8fd750ce53ad62128ab5bb873dcd5ab76",
+      "fits/seed11_f0_oracle_0.003/complete.json": "47574d5ec210663faa868422cae7046d468fdcf530fda7fbb703bfa9a5fb4198",
+      "fits/seed11_f0_sideband_0.003/complete.json": "786608f8e4f9f8eedbbee1a67edcd2865182393cda3da26978d55e8f4f1a7275",
+      "fits/seed22_f0.005_efp_mlp/complete.json": "7c0343c37e31ebed190d3fea609bb90b4a16249815e2fd6bfa599f295102b715",
+      "fits/seed22_f0.005_mass_gbdt/complete.json": "001bb9690d44ca82de8a640e4b49b5d3b82020e01c09df822e2389bd5c710fa7",
+      "fits/seed22_f0.005_mass_mlp/complete.json": "29c1218d5ec1a1118953c6a507f9fa703490a8a8bed260fb34ced55ca48c1729",
+      "fits/seed22_f0.005_oracle_0.003/complete.json": "6043f3dd29122e7041072fa41335af7713a3ce39a0ba1e8faada800d58d52b84",
+      "fits/seed22_f0.005_sideband_0.003/complete.json": "37271c0cd93d418314e13dadffbeefcc456d596303c42b13ab68b02cec5a16f0",
+      "fits/seed22_f0.01_efp_mlp/complete.json": "8eb6e7c02a5d9065a2ee29957ac34b9bd0dd2f98bc4045ffe4a2ae2bf0e898e6",
+      "fits/seed22_f0.01_mass_gbdt/complete.json": "9dd1c3389ea978d2ea55747d0cd93300eb5f699addb09286de8e332eb9aa1dad",
+      "fits/seed22_f0.01_mass_mlp/complete.json": "bc685a4e4a5fad4e5c8dd1d1ef31d31be7fc0d628610024af2eb54bb468eb4bb",
+      "fits/seed22_f0.01_oracle_0.003/complete.json": "edce96fb84bb67f252ef3ccdb72fd3cee6f0f5135bfc9c435f07d79138af8c80",
+      "fits/seed22_f0.01_sideband_0.003/complete.json": "b49528bc63ea8bb9a3f797ba3f2ab194cae0b828ed6431ba7a055447df898866",
+      "fits/seed22_f0_efp_mlp/complete.json": "476a006cd66641860b1cd2f01345e8b7449d02a091f53d3159d34a159b0b758e",
+      "fits/seed22_f0_mass_gbdt/complete.json": "4d2e2ade6629291ef5b33e897a972dae0f66c98b8f7cf28b44e91243d545e800",
+      "fits/seed22_f0_mass_mlp/complete.json": "93c197ee222eaecaf3887493f7e4412525498fb5cc6cd50e4c5136e26ec680b3",
+      "fits/seed22_f0_oracle_0.003/complete.json": "ac148fcd26a45c97aee04ddaf6ef415020bcd34c0dca8f972eb7a19c3e915d5c",
+      "fits/seed22_f0_sideband_0.003/complete.json": "f237ba52ba3942f06d75c7c27abf5af39d7a7134eccbea43e17cf7f7f4077e46",
+      "fits/seed33_f0.005_efp_mlp/complete.json": "b319ff5b27086aac0ff218799c18d85542ac388a8a66427d3cad8c3ef537481f",
+      "fits/seed33_f0.005_mass_gbdt/complete.json": "c0820b7e426d0af8ee4f55398ad20d7fb9ad72e78bd6eb95b69bc201581567f0",
+      "fits/seed33_f0.005_mass_mlp/complete.json": "364b99b6b52712b467577e279d408fa4c5ca7d40bd2d4e7e3d638e8cd67abb45",
+      "fits/seed33_f0.005_oracle_0.003/complete.json": "226b56c15dbb62588cc3dadf268152f1946327545972df9132fd41d1c9b48953",
+      "fits/seed33_f0.005_sideband_0.003/complete.json": "d3acb4879b42590c5ac5e0db4a739f072efa0fbd3d88aa4befa8fccc459b7341",
+      "fits/seed33_f0.01_efp_mlp/complete.json": "839c1b134b30e6f2b6ab04343ba50fd1c9f697e62eb6ac24217e97d581a2e439",
+      "fits/seed33_f0.01_mass_gbdt/complete.json": "586a41d7617e19fe7b5db408b3b1e883504c90b110fe913df5ee1471ef054ae8",
+      "fits/seed33_f0.01_mass_mlp/complete.json": "901dd1d92db7e91059962ca4d6b7a32b601fa65b26da0e2d4b1a088fef239997",
+      "fits/seed33_f0.01_oracle_0.003/complete.json": "e19baac02287c5db03840b9982d2358f97a8ef155a92a33bf40ef6cd94db9337",
+      "fits/seed33_f0.01_sideband_0.003/complete.json": "226f8bbecf4b2f7efe131138a659129e640687cb4791dfd5f122938f9d160de4",
+      "fits/seed33_f0_efp_mlp/complete.json": "1684aff0148f300958a583f8cde430bcf940c98e7400f133c39bbc786eb84cb8",
+      "fits/seed33_f0_mass_gbdt/complete.json": "6b30fdb40c0b6b3c039434f4dd1d54968a6ed413b9f15fd01bcce0d2ea894bb4",
+      "fits/seed33_f0_mass_mlp/complete.json": "ae7d2ff65500f508d994c15fc1e2e220cf650d4b6006559363e64976fc0d3db3",
+      "fits/seed33_f0_oracle_0.003/complete.json": "9e7067e8375fcf1f2e1b6f8eb7cd852f7769400b6a25a5b31e6b78c46ffd7140",
+      "fits/seed33_f0_sideband_0.003/complete.json": "6170f181378237de8eabcdca5e1f5f469ddea838ed5ecde3826054adcefc650c",
+      "protocol.json": "6d17e8c0b483cdf21e22435516a47c569184fef5d3c28c98a435608d419a4a43",
+      "splits.json": "dc739e07ac151f8f0e983efd97335ff79d0beed3057599f885b36f7361d6ddee"
+    },
+    "limitation": "Content and arithmetic audit; not certification of unknown exposure or simulator correctness",
+    "metric_records": 180,
+    "run_id": "bdc6552f4f1c04e643e188456bf34c1badeff280dc3704cc2d19142f092b1527",
+    "status": "passed",
+    "tolerance": {
+      "atol": 1e-12,
+      "rtol": 1e-10
+    }
+  },
+  "cache_sha256": "33a5833e5be74052c95f94f61ee70d7b100c3de86eb8336eb1bc99952b996ab2",
+  "config": {
+    "chunk_size": 128,
+    "degree": 4,
+    "device": "cuda",
+    "epochs": 15,
+    "events": 10000,
+    "fractions": [
+      0.0,
+      0.005,
+      0.01
+    ],
+    "lambdas": [
+      0.003
+    ],
+    "permutations": 199,
+    "seeds": [
+      11,
+      22,
+      33
+    ],
+    "smoke": false,
+    "start_row": 0,
+    "telemetry": true,
+    "threads": 2
+  },
+  "dataset_sha256": "9c10ed6d17fea860e066fb8e68537810643322557c3cbe51d7a2f2829880bada",
+  "date": "2026-11-18",
+  "environment": {
+    "cublas_workspace_config": ":4096:8",
+    "cuda": "13.2",
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": false,
+    "deterministic": true,
+    "device": "cuda",
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "packages": {
+      "energyflow": "1.4.0",
+      "fastjet": "3.5.2.0",
+      "h5py": "3.16.0",
+      "hdf5plugin": "7.1.0",
+      "joblib": "1.6.0",
+      "matplotlib": "3.11.2",
+      "numpy": "2.5.5",
+      "scikit-learn": "1.9.1",
+      "scipy": "1.18.1",
+      "torch": "2.15.0"
+    },
+    "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "python": "3.12.14",
+    "threads": 2
+  },
+  "final_predictions_scored": false,
+  "freeze_sha256": "9533302cce01ede133e6c6f86483d2f4303d2696f095835c47c08b5aeb8e8803",
+  "host_tests": {
+    "passed": 27,
+    "total": 27
+  },
+  "limitation": "Limited 10k-row exploratory development check, not the canonical 200k-row study or independent final confirmation",
+  "optimized_checks": {
+    "passed": 13,
+    "skipped_cuda_in_sandbox": 1,
+    "total": 14
+  },
+  "protocol_sha256": "6d17e8c0b483cdf21e22435516a47c569184fef5d3c28c98a435608d419a4a43",
+  "report": "output/v2_development_10k_final_report/REPORT.html",
+  "report_complete_sha256": "a84be1e4a489e0c5a2da29aa91930df32769259176856e44f138259dbeae5215",
+  "run": "results_v2_development_10k_final",
+  "run_id": "bdc6552f4f1c04e643e188456bf34c1badeff280dc3704cc2d19142f092b1527"
+}

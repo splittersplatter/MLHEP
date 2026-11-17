@@ -1,130 +1,79 @@
-"""Validation-only weak-DisCo search. Run locally; no test predictions are read."""
+"""Assess prescribed lambda=0.003 using verified study fits, without retraining."""
 import argparse
-import csv
-import hashlib
-import json
 from pathlib import Path
-import numpy as np
-import torch
-from study import ROOT, partitions, inject, prepare, train_mlp, score_model, metrics_for, region
+from itertools import product
+from artifacts import verify_run
+from provenance import atomic_json, read_json, file_hash
+from metrics import mean_complete, ratio
+from protocol import SIC_TARGET, JS_TARGET
 
-STRENGTHS = [0.001, 0.003, 0.01, 0.03]
 SEEDS = [11, 22, 33]
-FRACTIONS = [0.005, 0.01]
+FRACTIONS = [.005, .01]
+STRENGTHS = [.003]
 
 
-def select_strength(rows):
-    """Predeclared exploratory criterion: >=90% SIC, <=80% JS in BOTH regimes."""
-    summary=[]
-    for strength in STRENGTHS:
-        item={'lambda':strength,'eligible':True,'regimes':[]}
-        for fraction in FRACTIONS:
-            base=[r for r in rows if r['lambda']==0 and r['fraction']==fraction]
-            runs=[r for r in rows if r['lambda']==strength and r['fraction']==fraction]
-            if len(base)!=len(SEEDS) or len(runs)!=len(SEEDS):
-                item['eligible']=False
-                continue
-            if any(r['sic'] is None or r['js_divergence'] is None for r in base+runs):
-                item['eligible']=False
-                continue
-            b_sic=np.mean([r['sic'] for r in base]); b_js=np.mean([r['js_divergence'] for r in base])
-            sic=np.mean([r['sic'] for r in runs]); js=np.mean([r['js_divergence'] for r in runs])
-            ratio=float(sic/b_sic) if b_sic>0 else 0.
-            jsratio=float(js/b_js) if b_js>0 else float('inf')
-            item['regimes'].append(dict(fraction=fraction,sic=float(sic),js=float(js),sic_retained=ratio,js_ratio=jsratio))
-            item['eligible'] &= ratio>=.9 and jsratio<=.8
-        summary.append(item)
-    eligible=[r for r in summary if r['eligible'] and len(r['regimes'])==2]
-    best=min(eligible,key=lambda r:(np.mean([x['js_ratio'] for x in r['regimes']]),r['lambda'])) if eligible else None
-    return dict(selected_lambda=best['lambda'] if best else None,candidates=summary,
-                interpretation='Exploratory validation selection; requires fresh-data confirmation. No qualifying lambda is a valid outcome.')
+def select_strength(rows, seeds=SEEDS, fractions=FRACTIONS, strengths=STRENGTHS):
+    """Exact grid qualification; duplicate/missing keys never qualify."""
+    expected = set(product(seeds, fractions, [0.] + list(strengths)))
+    indexed = {}
+    for row in rows:
+        key = (row['seed'], row['fraction'], row['lambda'])
+        if key in indexed or key not in expected:
+            raise ValueError(f'Duplicate or unexpected comparison key: {key}')
+        indexed[key] = row
+    full = set(indexed) == expected
+    candidates = []
+    for strength in strengths:
+        item = dict(lambda_value=strength, eligible=full, regimes=[])
+        for fraction in fractions:
+            groups = [[indexed.get((seed, fraction, lam)) for seed in seeds] for lam in (0., strength)]
+            means = [[mean_complete([row[metric] if row else None for row in group])
+                      for metric in ('sic', 'js_divergence')] for group in groups]
+            sr, js = ratio(means[1][0], means[0][0]), ratio(means[1][1], means[0][1])
+            qualifies = bool(full and sr is not None and js is not None and sr >= SIC_TARGET and js <= JS_TARGET)
+            item['eligible'] &= qualifies
+            # Paired leave-one-seed-out ratios reveal sensitivity to training seeds.
+            influence = []
+            for omitted in seeds:
+                remaining = [s for s in seeds if s != omitted]
+                vals = [[mean_complete([indexed.get((s, fraction, lam), {}).get(metric) for s in remaining])
+                         for metric in ('sic', 'js_divergence')] for lam in (0., strength)]
+                influence.append(dict(omitted_seed=omitted, sic_ratio=ratio(vals[1][0], vals[0][0]), js_ratio=ratio(vals[1][1], vals[0][1])))
+            item['regimes'].append(dict(fraction=fraction, expected_seeds=list(seeds), denominator=len(seeds),
+                                        sic_retained=sr, js_ratio=js, qualifies=qualifies, leave_one_seed_out=influence))
+        candidates.append(item)
+    return dict(assessment='prescribed_fixed_lambda' if len(strengths) == 1 else 'predeclared_search',
+                prescribed_lambda=strengths[0] if len(strengths) == 1 else None,
+                status='complete' if full else 'incomplete', expected_records=len(expected), actual_records=len(indexed),
+                missing_keys=[list(k) for k in sorted(expected-set(indexed))], candidates=candidates,
+                targets_met=bool(full and all(c['eligible'] for c in candidates)),
+                interpretation='Exploratory paired comparison on tuning events; event sample shared across seeds.')
+
+
+def assess(run):
+    run = Path(run)
+    protocol = verify_run(run)
+    config = protocol['identity']['config']
+    rows = read_json(run/'results/metrics.json')
+    comparison = [dict(row, **{'lambda': 0. if row['model'] == 'mass_mlp' else .003})
+                  for row in rows if row['model'] in ('mass_mlp', 'sideband_0.003') and row['split'] == 'tuning' and row['cut'] == .05]
+    result = select_strength(comparison, config['seeds'], config['fractions'])
+    result.update(run_id=protocol['run_id'], unique_fits=len(protocol['identity']['expected_fits']), new_fits=0,
+                  reuse='Existing verified fits referenced exactly once; not additional independent evidence',
+                  input_sha256=file_hash(run/'results/metrics.json'))
+    return result
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output',type=Path,default=ROOT/'results_tuning')
-    parser.add_argument('--max-new-fits',type=int,default=24,help='Limit this invocation; rerun to resume')
-    args=parser.parse_args()
-    if args.max_new_fits<0: parser.error('max-new-fits must be nonnegative')
-    source=ROOT/'results_study'
-    original=json.loads((source/'config.json').read_text())
-    cache=ROOT/'feature_cache'/'jets_ee22264f96aec21c.npz'
-    if not cache.exists(): raise FileNotFoundError(f'Required existing cache missing: {cache}. No raw-data extraction is attempted.')
-    with np.load(cache) as saved:
-        meta=json.loads(str(saved['metadata']))
-        if meta['events']!=200000 or meta['degree']!=4 or meta['version']!=2:
-            raise ValueError('Unexpected cache provenance')
-        data={k:saved[k] for k in ('x','mass','truth','row','jet_mass')}
-    args.epochs=original['epochs']
-    protocol=dict(version=1,lambdas=STRENGTHS,seeds=SEEDS,fractions=FRACTIONS,epochs=args.epochs,
-        cache_sha256=hashlib.sha256(cache.read_bytes()).hexdigest(),
-        criterion='For each fraction separately: mean validation SIC >=90% baseline and mean JS <=80% baseline. Choose lowest mean JS ratio; tie: weaker lambda.',
-        source_sha256={p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in ('study.py','tune_disco.py')})
-    args.output.mkdir(parents=True,exist_ok=True)
-    config=args.output/'protocol.json'
-    encoded=json.dumps(protocol,indent=2,sort_keys=True)
-    if config.exists() and config.read_text()!=encoded: raise ValueError('Protocol changed: use a new output directory')
-    config.write_text(encoded)
-    torch.set_num_threads(2)
-    rows=[]; new_fits=0
-    for seed in SEEDS:
-        train_pool,valid_pool,excluded_test=partitions(data,seed)
-        sr=region(data['mass']); truth=data['truth']
-        valid_eval=valid_pool[(truth[valid_pool]==0)|(sr[valid_pool]==1)]
-        for fraction in FRACTIONS:
-            base_dir=source/f'seed{seed}_f{fraction:g}_mass_mlp'
-            # Open ONLY validation arrays; test arrays in the archive are never loaded.
-            with np.load(base_dir/'predictions.npz') as saved:
-                assert np.array_equal(saved['validation_rows'],data['row'][valid_eval])
-                base_score=saved['validation_score']
-            threshold=float(np.quantile(base_score[sr[valid_eval]==0],.95))
-            base=metrics_for(data,valid_eval,base_score,threshold,seed+300,199)
-            rows.append(dict(seed=seed,fraction=fraction,**{'lambda':0.},**base))
-            train=inject(train_pool,truth,sr,fraction,seed)
-            valid=inject(valid_pool,truth,sr,fraction,seed+1)
-            assert not(set(train)&set(valid_eval) or set(train)&set(excluded_test) or set(valid_eval)&set(excluded_test))
-            x,preprocessing=prepare(data,train,True)
-            for strength in STRENGTHS:
-                directory=args.output/f'seed{seed}_f{fraction:g}_lambda{strength:g}'
-                done=directory/'metrics.json'
-                if done.exists(): rows.append(json.loads(done.read_text())); continue
-                if new_fits>=args.max_new_fits: continue
-                print(f'Fit {new_fits+1}: seed={seed}, SR signal={fraction:.1%}, lambda={strength}',flush=True)
-                model,history=train_mlp(x,data,train,valid,seed,'sideband',strength,args)
-                score=score_model(model,x[valid_eval])
-                threshold=float(np.quantile(score[sr[valid_eval]==0],.95))
-                result=metrics_for(data,valid_eval,score,threshold,seed+300,199)
-                # All-tied/collapsed output is a failed candidate, never an infinite SIC.
-                for key,value in result.items():
-                    if isinstance(value,float) and not np.isfinite(value): result[key]=None
-                row=dict(seed=seed,fraction=fraction,**{'lambda':strength},threshold=threshold,**result)
-                directory.mkdir(exist_ok=True)
-                torch.save(model.state_dict(),directory/'model.pt')
-                np.savez_compressed(directory/'preprocessing.npz',**preprocessing)
-                np.savez_compressed(directory/'validation.npz',rows=data['row'][valid_eval],score=score,
-                                    mass=data['mass'][valid_eval],truth=truth[valid_eval],train_rows=data['row'][train])
-                np.savetxt(directory/'training.csv',history,delimiter=',',header='epoch,train_bce,train_dcor2,val_bce,val_dcor2,val_objective')
-                done.write_text(json.dumps(row,indent=2,allow_nan=False));rows.append(row);new_fits+=1
-    keys=sorted(set().union(*(r.keys() for r in rows)))
-    with (args.output/'validation_summary.csv').open('w',newline='') as stream:
-        writer=csv.DictWriter(stream,fieldnames=keys);writer.writeheader();writer.writerows(rows)
-    completed=sum(r['lambda']!=0 for r in rows)
-    result=select_strength(rows)
-    result['completed_fits']=completed
-    if completed!=24: result['selected_lambda']=None
-    (args.output/'selection.json').write_text(json.dumps(result,indent=2))
-    lines=['# Validation-only DisCo tuning',f'Completed: {completed}/24 new fits.',
-           f'Selected lambda: {result["selected_lambda"]}',
-           'Selection is provisional until all fits complete and always requires fresh-data confirmation.',
-           '', '| Lambda | SR injection | SIC retained / baseline | JS / baseline | Qualifies in both regimes |',
-           '|---|---|---|---|---|']
-    for candidate in result['candidates']:
-        for regime in candidate['regimes']:
-            lines.append(f'| {candidate["lambda"]} | {regime["fraction"]:.1%} | {regime["sic_retained"]:.3f} | {regime["js_ratio"]:.3f} | {candidate["eligible"]} |')
-    lines+=['','If no lambda qualifies, do not claim a successful fix or relax the rule after seeing results.',
-            'Truth labels are used for simulation validation metrics, not the sideband training penalty.',
-            'Shared validation samples and checkpoint selection make these tuning results optimistic; no statistical significance is claimed.']
-    (args.output/'REPORT.md').write_text('\n'.join(lines))
-    print(f'Completed {completed}/24. Read {args.output / "REPORT.md"}',flush=True)
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--run', type=Path, required=True)
+    p.add_argument('--output', type=Path, required=True)
+    args = p.parse_args()
+    from report_study import validate_output
+    validate_output(args.run, args.output)
+    atomic_json(args.output, assess(args.run))
+    print(f'Fixed-lambda assessment: {args.output}')
 
-if __name__=='__main__': main()
+
+if __name__ == '__main__':
+    main()

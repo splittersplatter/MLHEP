@@ -39,12 +39,18 @@ figures/
 *.svg
 *.pdf
 
-# Documentation, report text, and audit inventories
-*.md
+# Generated HTML exports
 *.html
 FILE_MANIFEST.csv
 VERIFICATION_LOG.txt
+.linux-deps/
+output/
+exposure_ledger/
 
 # Logs and temporary files
 *.log
 *.tmp
+
+# Keep reviewed integrity requirements visible alongside maintained source.
+!/FIX_PLAN.md
+!/CRITIQUE_REVIEW.md

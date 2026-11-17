@@ -1,152 +1,292 @@
-"""Generate auditable study report and held-out mass-efficiency comparisons."""
+"""Audit all inputs before atomically publishing an artifact-derived HTML report."""
 import argparse
-import csv
-import json
+import html
+import itertools
 from pathlib import Path
+import shutil
+import tempfile
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, roc_curve
-from study import ROOT, extract, partitions, region
+from artifacts import verify_run, verify, complete
+from provenance import read_json, atomic_json, identity, file_hash, source_identity
+from splits import validate_roles
+from metrics import calibrate, metrics_for
+from protocol import BINS
+
+
+def validate_output(run, output):
+    run, output = Path(run).resolve(), Path(output).resolve()
+    if output == run or output.is_relative_to(run) or run.is_relative_to(output):
+        raise ValueError('Keep derived output separate from run artifacts')
+
+
+def equal_calculation(actual, expected):
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and actual.keys() == expected.keys() and all(equal_calculation(actual[k], v) for k, v in expected.items())
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(equal_calculation(a, b) for a, b in zip(actual, expected))
+    if isinstance(expected, (float, int)) and not isinstance(expected, bool):
+        return actual is not None and np.isclose(actual, expected, rtol=1e-10, atol=1e-12)
+    return actual == expected
+
+
+def audit_run(run):
+    run = Path(run)
+    protocol = verify_run(run)
+    frozen = protocol['identity']
+    if frozen['source'] != source_identity():
+        raise ValueError('Audit calculation source differs from saved run; use the retained source snapshot/environment')
+    splits = read_json(run/'splits.json')
+    all_records = []
+    fingerprints = {'protocol.json': file_hash(run/'protocol.json'), 'splits.json': file_hash(run/'splits.json')}
+    for name in frozen['expected_fits']:
+        directory = run/'fits'/name
+        marker = verify(directory, protocol['run_id'])
+        fingerprints[f'fits/{name}/complete.json'] = file_hash(directory/'complete.json')
+        meta = marker['metadata']
+        config = frozen['config']
+        if meta['seed'] not in config['seeds'] or meta['fraction'] not in config['fractions']:
+            raise ValueError('Unexpected fit metadata')
+        from study import fit_name, specifications, inject
+        expected_spec = next((s for s in specifications(config['lambdas']) if s[0] == meta['model']), None)
+        if (expected_spec is None or name != fit_name(meta['seed'], meta['fraction'], meta['model'])
+                or (meta['include_mass'], meta['mode'], meta['strength']) != expected_spec[1:]):
+            raise ValueError('Fit identity/strength mismatch')
+        roles = splits['seeds'][str(meta['seed'])]
+        validate_roles(roles)
+        with np.load(directory/'predictions.npz', allow_pickle=False) as p:
+            for key, role in [('train_rows', 'training'), ('checkpoint_rows', 'checkpoint')]:
+                rows = p[key]
+                if len(np.unique(rows)) != len(rows) or not set(map(int, rows)) <= set(roles[role]):
+                    raise ValueError('Fit uses wrong or overlapping role')
+            thresholds = read_json(directory/'thresholds.json')
+            if set(thresholds) != {str(c) for c in frozen['cuts']}:
+                raise ValueError('Calibration cut grid mismatch')
+            metrics = read_json(directory/'metrics.json')
+            keys = [(r['split'], r['cut']) for r in metrics]
+            if len(keys) != len(set(keys)) or set(keys) != set(itertools.product(['calibration', 'tuning'], frozen['cuts'])):
+                raise ValueError('Missing or duplicate metric grid')
+            for role in ('calibration', 'tuning'):
+                if p[f'{role}_row'].tolist() != roles[role]:
+                    raise ValueError('Prediction sample membership differs from manifest')
+                data = dict(mass=p[f'{role}_mass'], truth=p[f'{role}_truth'])
+                score = p[f'{role}_score']
+                for cut in frozen['cuts']:
+                    threshold = calibrate(p['calibration_mass'], p['calibration_score'], cut)
+                    if threshold != thresholds[str(cut)]:
+                        raise ValueError('Threshold not derived from calibration-only predictions')
+                    row = next(r for r in metrics if r['split'] == role and r['cut'] == cut)
+                    expected = dict(seed=meta['seed'], fraction=meta['fraction'], model=meta['model'], strength=meta['strength'],
+                                    cut=cut, split=role, threshold=threshold, nominal_calibration_acceptance=cut,
+                                    calibration_interpretation='in_sample_diagnostic')
+                    expected.update(metrics_for(data, np.arange(len(score)), score, threshold, meta['seed']+300, config['permutations']))
+                    if not equal_calculation(row, expected):
+                        raise ValueError(f'Saved metric recalculation failed: {name}/{role}/{cut}')
+            all_records.extend(metrics)
+    if read_json(run/'results/metrics.json') != all_records:
+        raise ValueError('Aggregate metrics differ from per-fit records')
+    from study import verified_data, reload_scores
+    data = verified_data(protocol)
+    from splits import indices
+    from study import inject
+    # Check exact nested injection membership and prediction event contents.
+    for name in frozen['expected_fits']:
+        directory = run/'fits'/name
+        meta = verify(directory, protocol['run_id'])['metadata']
+        pools = indices(data, splits, meta['seed'])
+        with np.load(directory/'predictions.npz', allow_pickle=False) as p:
+            from metrics import region
+            for key, role, offset in [('train_rows', 'training', 0), ('checkpoint_rows', 'checkpoint', 1)]:
+                expected = data['row'][inject(pools[role], data['truth'], region(data['mass']), meta['fraction'], meta['seed']+offset)]
+                if not np.array_equal(expected, p[key]):
+                    raise ValueError('Injected membership differs from protocol')
+            for role in ('calibration', 'tuning'):
+                for field in ('mass', 'truth'):
+                    if not np.array_equal(data[field][pools[role]], p[f'{role}_{field}']):
+                        raise ValueError('Prediction event contents differ from verified source features')
+                chosen = pools[role][:32]
+                prediction = reload_scores(directory, meta, {k: v[chosen] for k, v in data.items()})
+                if not np.allclose(prediction, p[f'{role}_score'][:32], atol=2e-6, rtol=0):
+                    raise ValueError('CPU model reload differs from saved predictions')
+    from audit_predictions import audit as independent_audit
+    independent = independent_audit(run)
+    return dict(independent_calculation=independent, status='passed', run_id=protocol['run_id'], fits=len(frozen['expected_fits']),
+                metric_records=len(all_records), input_sha256=fingerprints,
+                tolerance=dict(rtol=1e-10, atol=1e-12), limitation='Content and arithmetic audit; not certification of unknown exposure or simulator correctness')
+
+
+def render(run, output, diagnostic=False):
+    run, output = Path(run), Path(output)
+    validate_output(run, output)
+    audit = audit_run(run)  # Never create scientific output before this succeeds.
+    protocol = read_json(run/'protocol.json')
+    if protocol['identity']['config']['smoke'] and not diagnostic:
+        raise ValueError('Synthetic runs require --diagnostic and cannot produce a scientific report')
+    if output.exists():
+        raise ValueError('Report output already exists; choose a new output directory')
+    rows = read_json(run/'results/metrics.json')
+    from tune_disco import assess
+    assessment = assess(run)
+    label = 'SYNTHETIC SOFTWARE CHECK — NOT PHYSICS RESULTS' if diagnostic else protocol['identity']['interpretation']
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(dir=output.parent, prefix='.'+output.name))
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        images = []
+        for fraction, cut, split in itertools.product(protocol['identity']['config']['fractions'], protocol['identity']['cuts'], ['calibration', 'tuning']):
+            group = [r for r in rows if (r['fraction'], r['cut'], r['split']) == (fraction, cut, split)]
+            fig, ax = plt.subplots(figsize=(9, 5))
+            for model in sorted({r['model'] for r in group}):
+                subset = [r for r in group if r['model'] == model]
+                rates = np.array([[b/a if a else np.nan for a, b in zip(r['local']['bin_total'], r['local']['bin_selected'])] for r in subset])
+                valid = np.isfinite(rates).all(axis=0)
+                centers = (BINS[1:] + BINS[:-1])/2
+                ax.errorbar(centers[valid], rates[:, valid].mean(0), yerr=rates[:, valid].std(0), fmt='.-', label=f'{model} ({len(subset)} seeds)')
+            ax.axvspan(3300, 3700, color='gray', alpha=.1)
+            ax.axhline(cut, color='gray', linestyle=':')
+            ax.set(xlabel='Dijet mass [GeV]', ylabel='Background acceptance', title=f'{label}\nf={fraction:g}; nominal cut={cut:g}; {split}; bars: seed SD')
+            ax.legend(fontsize=8)
+            fig.tight_layout()
+            filename = f'efficiency_f{fraction:g}_cut{cut:g}_{split}.png'
+            fig.savefig(temporary/filename, dpi=130)
+            plt.close(fig)
+            images.append(filename)
+        def esc(value):
+            return html.escape(str(value))
+        def show(value):
+            return 'unavailable' if value is None else (f'{value:.6g}' if isinstance(value, float) else esc(value))
+        cols = ['seed', 'fraction', 'model', 'cut', 'split', 'threshold', 'sic', 'js_divergence', 'background_efficiency_sb', 'background_efficiency_sr', 'score_std']
+        table = '<table><tr>'+''.join(f'<th>{esc(c)}</th>' for c in cols)+'</tr>'
+        for row in rows:
+            table += '<tr>'+''.join(f'<td>{show(row[c])}</td>' for c in cols)+'</tr>'
+        table += '</table>'
+        # Failed or undefined comparisons cannot yield a success headline.
+        verdict = 'Fixed-lambda point targets met on tuning data.' if assessment['targets_met'] else 'Fixed-lambda point targets not established on tuning data.'
+        details = []
+        for row in rows:
+            details.append(f'<details><summary>{esc(row["model"])} seed {row["seed"]}, f={row["fraction"]}, {row["split"]}, cut={row["cut"]}</summary><pre>{esc(__import__("json").dumps(dict(local=row["local"], closure=row["closure"], undefined_reasons=row["undefined_reasons"]), indent=2, allow_nan=False))}</pre></details>')
+        content = f'''<!doctype html><html><head><meta charset="utf-8"><title>MLHEP {esc(label)}</title>
+<style>body{{font:16px system-ui;margin:2rem;max-width:1300px}}table{{border-collapse:collapse;font-size:12px}}td,th{{padding:6px;border:1px solid #bbb}}img{{max-width:100%}}pre{{white-space:pre-wrap}}.notice{{background:#fff0cd;padding:1rem}}</style></head><body>
+<h1>{esc(label)}</h1><p>Run ID: <code>{protocol['run_id']}</code></p>
+<p class="notice">{esc(verdict)} This is an exploratory comparison. Calibration acceptance is an in-sample diagnostic. The dataset has unknown prior exposures beyond documented uses. Previously evaluated raw rows 200000–299999 are exploratory. No independent confirmation is claimed.</p>
+<p>Audit: {audit['fits']} verified unique fits, {audit['metric_records']} metric records. Every configured seed is included. Acceptance uses strict score &gt; cut, linear calibration quantiles and base-2 JS. Undefined values remain unavailable. Bar widths show training-seed SD, not independent-event uncertainty.</p>
+<p>SR/SB ratios can reflect a smooth trend; neither those ratios nor a global JS reduction establish a localized excess or removal of mass sculpting. Closure is a descriptive sideband-only linear interpolation conditional on the threshold; calibration uncertainty and a validated background fit remain required for physics claims.</p>
+<h2>Every seed and operating point</h2>{table}<h2>Fixed-lambda assessment and seed influence</h2><pre>{esc(__import__('json').dumps(assessment, indent=2, allow_nan=False))}</pre>
+<h2>Background efficiency</h2>{''.join(f'<img src="{name}" alt="Background efficiency by mass">' for name in images)}
+<h2>Per-seed local counts, intervals and closure</h2>{''.join(details)}
+<p>Full numerical values and undefined reasons: metrics.json. Training floor diagnostics and gradient telemetry: each verified fit. This report contains no bump significance or causal explanation of the penalty.</p></body></html>'''
+        (temporary/'REPORT.html').write_text(content)
+        atomic_json(temporary/'audit.json', audit)
+        atomic_json(temporary/'metrics.json', rows)
+        atomic_json(temporary/'assessment.json', assessment)
+        atomic_json(temporary/'figure_manifest.json', dict(run_id=protocol['run_id'], protocol_sha256=file_hash(run/'protocol.json'), images=images))
+        complete(temporary, protocol['run_id'], dict(analysis='diagnostic' if diagnostic else 'exploratory_report'))
+        verify(temporary, protocol['run_id'])
+        temporary.rename(output)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return output/'REPORT.html'
+
+
+def render_evaluation(run, evaluation, output, diagnostic=False):
+    run, evaluation, output = map(Path, (run, evaluation, output))
+    validate_output(run, output)
+    validate_output(evaluation, output)
+    audit_run(run)
+    protocol = read_json(run/'protocol.json')
+    verify(evaluation, protocol['run_id'])
+    from audit_predictions import audit_replay
+    audit = audit_replay(run, evaluation)
+    freeze = read_json(evaluation/'protocol.json')
+    if freeze['freeze_id'] != identity(freeze['protocol']) or freeze['protocol']['run_id'] != protocol['run_id']:
+        raise ValueError('Evaluation freeze identity mismatch')
+    if protocol['identity']['config']['smoke'] and not diagnostic:
+        raise ValueError('Synthetic evaluation requires --diagnostic')
+    rows = read_json(evaluation/'metrics.json')
+    expected = set(itertools.product(freeze['protocol']['seeds'], freeze['protocol']['fractions'], freeze['protocol']['models'], freeze['protocol']['cuts']))
+    keys = [(r['seed'],r['fraction'],r['model'],r['cut']) for r in rows]
+    if len(keys) != len(set(keys)) or set(keys) != expected:
+        raise ValueError('Incomplete evaluation grid')
+    splits = read_json(run/'splits.json')
+    reserved = set(freeze['protocol']['rows'])
+    if reserved != set(splits['seeds'][str(freeze['protocol']['seeds'][0])]['final']):
+        raise ValueError('Final reservation mismatch')
+    from study import verified_data
+    data = verified_data(protocol)
+    lookup = {int(row): i for i,row in enumerate(data['row'])}
+    selected = np.array([lookup[row] for row in freeze['protocol']['rows']])
+    selected = selected[(data['truth'][selected] == 0) | ((data['mass'][selected] >= 3300) & (data['mass'][selected] < 3700))]
+    for path in evaluation.glob('*.npz'):
+        with np.load(path, allow_pickle=False) as p:
+            for field in ('row','mass','truth'):
+                if not np.array_equal(p[field],data[field][selected]):
+                    raise ValueError('Evaluation differs from exact reserved sample or event contents')
+    if output.exists():
+        raise ValueError('Output exists; choose a new report directory')
+    interpretation = read_json(evaluation/'interpretation.json')
+    label = 'SYNTHETIC SOFTWARE CHECK' if diagnostic else interpretation['mode']
+    output.parent.mkdir(parents=True,exist_ok=True)
+    temp = Path(tempfile.mkdtemp(dir=output.parent,prefix='.'+output.name))
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        images = []
+        for fraction,cut in itertools.product(freeze['protocol']['fractions'],freeze['protocol']['cuts']):
+            fig,ax = plt.subplots(figsize=(9,5))
+            for model in freeze['protocol']['models']:
+                group = [r for r in rows if (r['fraction'],r['model'],r['cut']) == (fraction,model,cut)]
+                rates = np.array([[b/a if a else np.nan for a,b in zip(r['local']['bin_total'],r['local']['bin_selected'])] for r in group])
+                good = np.isfinite(rates).all(0)
+                centers = np.arange(3125,3900,50)
+                ax.errorbar(centers[good],rates[:,good].mean(0),yerr=rates[:,good].std(0),fmt='.-',label=model)
+            ax.axvspan(3300,3700,color='gray',alpha=.1)
+            ax.axhline(cut,color='gray',linestyle=':')
+            ax.set(title=f'{label}; f={fraction:g}; nominal cut={cut:g}; seed SD',xlabel='Dijet mass [GeV]',ylabel='Background acceptance')
+            ax.legend()
+            fig.tight_layout()
+            name=f'evaluation_f{fraction:g}_cut{cut:g}.png'
+            fig.savefig(temp/name,dpi=130)
+            plt.close(fig)
+            images.append(name)
+        import json
+        esc = html.escape
+        comparisons = read_json(evaluation/'comparisons.json')
+        content = f'<!doctype html><html><head><meta charset="utf-8"><title>MLHEP {esc(label)}</title></head><body><h1>{esc(label)}</h1><p>Run ID: {protocol["run_id"]}; freeze: {freeze["freeze_id"]}</p>'
+        content += '<p>Previously evaluated raw rows 200000–299999 remain historical exploratory data. No row-number rule establishes unused data. Intervals are conditional paired event-bootstrap intervals with fixed models and thresholds; seed variability is not independent-event evidence. Undefined replicates make their interval unavailable. Global JS and SR/SB ratios do not establish absence of a fake resonance.</p>'
+        content += '<h2>Every configured fraction</h2><pre>'+esc(json.dumps(comparisons,indent=2,allow_nan=False))+'</pre>'
+        content += ''.join(f'<img style="max-width:100%" src="{name}" alt="Evaluation background acceptance">' for name in images)
+        content += '<h2>Every seed and cut, including unavailable metrics</h2><pre>'+esc(json.dumps(rows,indent=2,allow_nan=False))+'</pre></body></html>'
+        (temp/'REPORT.html').write_text(content)
+        atomic_json(temp/'audit.json',audit)
+        atomic_json(temp/'figure_manifest.json',dict(run_id=protocol['run_id'],evaluation_complete_sha256=file_hash(evaluation/'complete.json'),images=images))
+        complete(temp,protocol['run_id'],dict(analysis=label))
+        verify(temp,protocol['run_id'])
+        temp.rename(output)
+    finally:
+        if temp.exists():
+            shutil.rmtree(temp)
+    return output/'REPORT.html'
 
 
 def main():
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--output',type=Path,default=ROOT/'results_study')
-    args=parser.parse_args()
-    config=json.loads((args.output/'config.json').read_text())
-    rows=[]
-    for path in sorted(args.output.glob('seed*/metrics.json')):
-        rows.extend(json.loads(path.read_text()))
-    expected=len(config['seeds'])*len(config['fractions'])*(3+2*len(config['lambdas']))
-    completed=len(list(args.output.glob('seed*/metrics.json')))
-    lines=['# CWoLa / DisCo experimental report', '', f'Completed fits: {completed}/{expected}.',
-           '','Values below are means +/- seed standard deviations on a shared test set.',
-           'Signal fractions refer to injected training SR mixtures; test signal is held out.',
-           'The 5% cut is fixed by validation sidebands, not test data.', '',
-           '| Training fraction | Model | SR SIC | SR signal efficiency | SR background efficiency | JS | JS null median |',
-           '|---|---|---|---|---|---|---|']
-    for fraction in config['fractions']:
-        subset=[r for r in rows if r['fraction']==fraction and r['split']=='test' and r['cut']==.05]
-        for name in sorted({r['model'] for r in subset}):
-            group=[r for r in subset if r['model']==name]
-            def display(key):
-                values=np.array([r[key] for r in group if r[key] is not None])
-                return f'{values.mean():.4f} +/- {values.std():.4f}' if len(values) else 'undefined'
-            lines.append(f'| {fraction:.1%} | {name} | '+ ' | '.join(display(k) for k in ['sic','signal_efficiency','background_efficiency_sr','js_divergence','js_null_median'])+' |')
-    lines += ['', '## Interpretation limits', '',
-        '- Predefined configurations are all reported; no winner is chosen using the test set.',
-        '- Zero-signal training still has held-out signal evaluation; this is not a signal injection into the null training sample.',
-        '- Oracle regularization uses truth-background labels; sideband regularization does not.',
-        '- A lower distortion metric alone is insufficient: inspect signal efficiency and score variation.',
-        '- Seed spreads share a fixed test sample and do not quantify independent-data uncertainty.',
-        '- SIC is not a bump significance. No background fit or discovery p-value is provided.',
-        '- This is a reduced degree-4 EFP study, not a reproduction of the full paper.']
-    (args.output/'REPORT.md').write_text('\n'.join(lines))
-    paired=[]
-    for row in rows:
-        if row['split']!='test' or not row['model'].startswith(('oracle','sideband')): continue
-        reference=next((r for r in rows if r['split']=='test' and r['model']=='mass_mlp'
-            and r['seed']==row['seed'] and r['fraction']==row['fraction'] and r['cut']==row['cut']),None)
-        if reference is None: continue
-        paired.append(dict(seed=row['seed'],fraction=row['fraction'],cut=row['cut'],model=row['model'],
-            delta_sic=row['sic']-reference['sic'] if row['sic'] is not None and reference['sic'] is not None else None,
-            delta_js=row['js_divergence']-reference['js_divergence'],
-            delta_dcor_squared=row['score_mass_dcor_squared']-reference['score_mass_dcor_squared']))
-    if paired:
-        with (args.output/'paired_differences.csv').open('w',newline='') as f:
-            writer=csv.DictWriter(f,fieldnames=list(paired[0]));writer.writeheader();writer.writerows(paired)
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--run', type=Path, required=True)
+    p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--diagnostic', action='store_true')
+    p.add_argument('--audit-only', action='store_true')
+    p.add_argument('--evaluation', type=Path)
+    args = p.parse_args()
+    if args.audit_only:
+        validate_output(args.run, args.output)
+        atomic_json(args.output, audit_run(args.run))
+    elif args.evaluation:
+        print(render_evaluation(args.run,args.evaluation,args.output,args.diagnostic))
+    else:
+        print(render(args.run, args.output, args.diagnostic))
 
-    # Representative seed is fixed in advance as the first configured seed.
-    seed=config['seeds'][0]
-    for fraction in config['fractions']:
-        fig,axes=plt.subplots(2,1,figsize=(10,8),sharex=True)
-        bins=np.linspace(3100,3900,17); centers=(bins[1:]+bins[:-1])/2
-        baseline_drawn=False
-        for path in sorted(args.output.glob(f'seed{seed}_f{fraction:g}_*/predictions.npz')):
-            model=path.parent.name.split(f'_f{fraction:g}_')[1]
-            if model not in ('efp_mlp','mass_mlp','mass_gbdt','oracle_0.1','sideband_0.1'): continue
-            records=json.loads((path.parent/'metrics.json').read_text())
-            threshold=next(r['threshold'] for r in records if r['cut']==.05 and r['split']=='test')
-            with np.load(path) as d:
-                background=d['test_truth']==0
-                mass=d['test_mass'][background]; selected=d['test_score'][background]>threshold
-            n=np.histogram(mass,bins)[0]; k=np.histogram(mass[selected],bins)[0]
-            if not baseline_drawn:
-                axes[0].hist(mass,bins=bins,density=True,histtype='step',color='black',label='All QCD',lw=2)
-                baseline_drawn=True
-            if selected.any(): axes[0].hist(mass[selected],bins=bins,density=True,histtype='step',label=model)
-            good=n>0; rate=k[good]/n[good]
-            center=(rate+.5/n[good])/(1+1/n[good]); half=np.sqrt(rate*(1-rate)/n[good]+.25/n[good]**2)/(1+1/n[good])
-            errors=np.maximum(0,np.vstack((rate-np.clip(center-half,0,1),np.clip(center+half,0,1)-rate)))
-            axes[1].errorbar(centers[good],rate,yerr=errors,fmt='.-',alpha=.7,label=model)
-        for ax in axes:
-            ax.axvspan(3300,3700,color='gray',alpha=.1); ax.grid(alpha=.2); ax.legend(fontsize=8)
-        axes[0].set(title=f'Seed {seed}; training SR injection {fraction:.1%}; validation SB 5% cut',ylabel='Normalized density / GeV')
-        axes[1].axhline(.05,color='black',ls=':')
-        axes[1].set(xlabel='Dijet mass [GeV]',ylabel='QCD selection efficiency')
-        fig.tight_layout(); fig.savefig(args.output/f'closure_f{fraction:g}.png',dpi=160); plt.close(fig)
-    for fraction in config['fractions']:
-        fig,axes=plt.subplots(1,2,figsize=(12,5))
-        for path in sorted(args.output.glob(f'seed{seed}_f{fraction:g}_*/predictions.npz')):
-            model=path.parent.name.split(f'_f{fraction:g}_')[1]
-            with np.load(path) as d:
-                sr=region(d['test_mass'])==1
-                truth=d['test_truth'][sr]; score=d['test_score'][sr]
-                fpr,tpr,_=roc_curve(truth,score)
-                # Omit unstable extreme tails with fewer than 20 expected selected backgrounds.
-                good=(fpr*(truth==0).sum()>=20)&(fpr>0)
-                axes[0].plot(fpr,tpr,label=model)
-                axes[1].plot(fpr[good],tpr[good]/np.sqrt(fpr[good]),label=model)
-        axes[0].plot([0,1],[0,1],'k:',label='Random')
-        axes[0].set(xlabel='SR background efficiency',ylabel='SR signal efficiency',title='Held-out SR ROC')
-        axes[1].axhline(1,color='black',ls=':')
-        axes[1].set(xlabel='SR background efficiency',ylabel='SIC',title='Diagnostic curve; not used to choose cuts')
-        for ax in axes: ax.grid(alpha=.2);ax.legend(fontsize=7)
-        fig.suptitle(f'Predetermined representative seed {seed}; training injection {fraction:.1%}')
-        fig.tight_layout();fig.savefig(args.output/f'roc_sic_f{fraction:g}.png',dpi=160);plt.close(fig)
 
-    # Feature information is diagnosed on development events, never on final test.
-    extract_args=argparse.Namespace(data=Path(config['data']),events=config['events'],degree=config['degree'],chunk_size=config['chunk_size'])
-    data=extract(extract_args)
-    train,_,_=partitions(data,seed)
-    train=train[data['truth'][train]==0]
-    raw=np.column_stack((data['x'],data['jet_mass']))
-    names=[f'efp_{i}' for i in range(data['x'].shape[1])]+['lighter_jet_mass','jet_mass_difference']
-    with (args.output/'feature_diagnostics.csv').open('w',newline='') as f:
-        writer=csv.writer(f); writer.writerow(['feature','background_SR_vs_SB_univariate_AUC','abs_AUC_minus_half'])
-        for i,name in enumerate(names):
-            auc=roc_auc_score(region(data['mass'][train]),raw[train,i])
-            writer.writerow([name,auc,abs(auc-.5)])
-    # Additional simulation benchmark: calibrate a fixed SR background efficiency
-    # using validation truth only. This is separate from the data-driven SB cut.
-    fixed_rows=[]
-    for path in args.output.glob('seed*/predictions.npz'):
-        run=json.loads((path.parent/'metrics.json').read_text())[0]
-        with np.load(path) as d:
-            vb=(d['validation_truth']==0)&(region(d['validation_mass'])==1)
-            tb=(d['test_truth']==0)&(region(d['test_mass'])==1)
-            ts=(d['test_truth']==1)&(region(d['test_mass'])==1)
-            for target in (.2,.05):
-                threshold=np.quantile(d['validation_score'][vb],1-target)
-                selected=d['test_score']>threshold
-                eb,es=float(selected[tb].mean()),float(selected[ts].mean())
-                fixed_rows.append(dict(seed=run['seed'],fraction=run['fraction'],model=run['model'],
-                    target_sr_background_efficiency=target,test_background_efficiency=eb,
-                    test_signal_efficiency=es,test_sic=es/np.sqrt(eb) if eb else None))
-    with (args.output/'fixed_background_efficiency.csv').open('w',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=list(fixed_rows[0]));writer.writeheader();writer.writerows(fixed_rows)
-
-    # Audit disjointness and fixed test across all completed fits.
-    reference=None
-    for path in args.output.glob('seed*/predictions.npz'):
-        with np.load(path) as d:
-            tr,va,te=(set(d[k].tolist()) for k in ['train_rows','validation_rows','test_rows'])
-            assert not(tr&va or tr&te or va&te), str(path)
-            if reference is None: reference=te
-            assert te==reference, str(path)
-            assert np.isfinite(d['test_score']).all()
-    print(f'Report, diagnostics and split audits completed: {completed}/{expected} fits')
-
-if __name__=='__main__': main()
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,21 @@
+{
+  "cuda": "13.2",
+  "deterministic": false,
+  "device": "cpu",
+  "gpu": null,
+  "packages": {
+    "energyflow": "1.4.0",
+    "fastjet": "3.5.2.0",
+    "h5py": "3.16.0",
+    "hdf5plugin": "7.1.0",
+    "joblib": "1.6.0",
+    "matplotlib": "3.11.2",
+    "numpy": "2.5.5",
+    "scikit-learn": "1.9.1",
+    "scipy": "1.18.1",
+    "torch": "2.15.0"
+  },
+  "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "python": "3.12.14",
+  "threads": 14
+}

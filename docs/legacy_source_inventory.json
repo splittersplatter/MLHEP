@@ -1,0 +1,26 @@
+{
+  "description": "Source hashes before protocol-v2 changes; historical sources remain in initial Git commit and on-disk bundles. Missing historical training source remains unavailable.",
+  "files": {
+    "phase1.py": "67c7a9a714755ed8d5f7e7e5f06aed6e30d649ba33ae4930eec4f3ba34db1007",
+    "study.py": "b4c8f934fe075783cc863f049a26410fe04246f8fcb910a759679bbd901df688",
+    "tune_disco.py": "d0dcdaa7902fbe9c1f1ae150b1de5f5b632a5c9054f5650552b81235a1550cba",
+    "confirm_disco.py": "c035964ab2c01cc199c0ec36eea6a065cc3a60ba7f19b5ef56e44a2c6d26b416",
+    "report_study.py": "04a493af682fba65297e7957dd40b8dc6dd5dc20c1512d31e2941edc210157e5",
+    "report/build_report.py": "9433f741e8807a978f3c358af02a603f49d542a7dc8b2a31d18f696fcf3d3019",
+    "report/make_figures.py": "34548699c4b6d4d3fa2f1f0b2538ebdad6e8320d444f14a2d74edd07f1072d18",
+    "results_linux_new/study.py": "e7b224a9c580c7e958d27681d50df09512cb11cc1c66c3e780d4565f1fd75897",
+    "results_linux_new/confirm_disco.py": "f57b681c4ab2b8bd033f1f7258bfe049199730ea7b034235024e489517f7231f",
+    "results_linux_new/report_study.py": "dd48141f97ae66cfe03155e70f9f6d5d441c55ee14399dcdb468a482de4eddb0",
+    "results_linux_new/test_study.py": "7599fee69ec99dac6c3255fc2cbe4cca8c0ca2ce0335460cf3102268ac1ff9fa",
+    "results_linux_new/phase1.py": "87e925e57aad1952abc6d9a0e688fb512fb1baba3b6f98b33b63944667e37220",
+    "results_linux_new/tune_disco.py": "fe02560853699dfa3aeed0257864a980ef0be5f4807d8c26faf04fd1af052d25",
+    "reproducible_demo/study.py": "b4c8f934fe075783cc863f049a26410fe04246f8fcb910a759679bbd901df688",
+    "reproducible_demo/audit_results.py": "97db6674c7fa48edeb1daa1dc654fa3ec956a39efcf794608df131ccafc6dc18",
+    "reproducible_demo/confirm_disco.py": "c035964ab2c01cc199c0ec36eea6a065cc3a60ba7f19b5ef56e44a2c6d26b416",
+    "reproducible_demo/run_gauntlet.py": "105e728b870bff6f6fcd498586f65384484e50bd1a0290ace4d0846b74f4ca1b",
+    "reproducible_demo/report_study.py": "04a493af682fba65297e7957dd40b8dc6dd5dc20c1512d31e2941edc210157e5",
+    "reproducible_demo/test_study.py": "7599fee69ec99dac6c3255fc2cbe4cca8c0ca2ce0335460cf3102268ac1ff9fa",
+    "reproducible_demo/phase1.py": "67c7a9a714755ed8d5f7e7e5f06aed6e30d649ba33ae4930eec4f3ba34db1007",
+    "reproducible_demo/tune_disco.py": "d0dcdaa7902fbe9c1f1ae150b1de5f5b632a5c9054f5650552b81235a1550cba"
+  }
+}
