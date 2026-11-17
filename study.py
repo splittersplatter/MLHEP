@@ -20,6 +20,7 @@ from artifacts import complete, verify, writer_lock
 from splits import allocate, indices, validate_roles
 from exposure import record_access
 from protocol import BINS, CUTS
+from preprocessing import BASELINE as BASELINE_TRANSFORM, VARIANTS, fit as fit_preprocessing, apply as apply_transform, raw as raw_transform
 
 
 def partitions(data, seed):
@@ -40,38 +41,16 @@ def inject(ids, truth, sr, fraction, seed):
     return np.concatenate((background, signal[:count]))
 
 
-def raw_features(data, include_mass):
-    raw = np.log(np.maximum(data['x'], 1e-12))
-    return np.column_stack((raw, np.log1p(np.maximum(data['jet_mass'], 0)))) if include_mass else raw
+def raw_features(data, include_mass, transform=BASELINE_TRANSFORM):
+    return raw_transform(data,include_mass,transform)
 
 
-def prepare(data, train, include_mass):
-    raw = raw_features(data, include_mass)
-    mean, scale = raw[train].mean(0), raw[train].std(0)
-    active = scale > 1e-8
-    if not active.any() or not np.isfinite(raw).all():
-        raise ValueError('No active features or invalid inputs')
-    standardized = ((raw[:, active]-mean[active])/scale[active]).astype('float32')
-    floor = data['x'][train] <= 1e-12
-    clipped = standardized[train, :][:, :int(active[:data['x'].shape[1]].sum())][floor[:, active[:data['x'].shape[1]]]]
-    diagnostics = dict(training_events=len(train), efp_floor_counts=floor.sum(0).tolist(),
-                       efp_floor_rates=floor.mean(0).tolist(), constant_columns=np.flatnonzero(~active).tolist(),
-                       active_feature_min=standardized[train].min(0).tolist(),
-                       active_feature_max=standardized[train].max(0).tolist(),
-                       clipped_standardized_range=[float(clipped.min()), float(clipped.max())] if clipped.size else None,
-                       transform='log(max(EFP,1e-12)); log1p(mass); training-only standardization')
-    return standardized, dict(mean=mean, scale=scale, active=active), diagnostics
+def prepare(data, train, include_mass, transform=BASELINE_TRANSFORM):
+    return fit_preprocessing(data,train,include_mass,transform)
 
 
-def apply_preprocessing(data, preprocessing, include_mass):
-    raw = raw_features(data, include_mass)
-    active, mean, scale = (preprocessing[k] for k in ('active', 'mean', 'scale'))
-    if raw.shape[1] != len(active) or mean.shape != scale.shape or mean.shape != active.shape or (scale[active] <= 0).any():
-        raise ValueError('Incompatible preprocessing')
-    x = ((raw[:, active]-mean[active])/scale[active]).astype('float32')
-    if not np.isfinite(x).all():
-        raise ValueError('Nonfinite transformed features')
-    return x
+def apply_preprocessing(data, preprocessing, include_mass, transform=BASELINE_TRANSFORM):
+    return apply_transform(data,preprocessing,include_mass,transform)
 
 
 def gradient_diagnostic(model, tx, ty, tm, weights, ids, allowed, strength):
@@ -153,6 +132,11 @@ def train_mlp(x, data, train, valid, seed, mode, strength, args):
         history.append([epoch+1, total_bce/batches, total_penalty/batches, val_bce, val_penalty, objective])
         if getattr(args, 'telemetry', False):
             detail = gradient_diagnostic(model, tx, ty, tm, weights, train[:512], allowed, strength)
+            validation_scores=torch.sigmoid(logits).detach().cpu().numpy()
+            detail.update(validation_score_std=float(validation_scores.std()),
+                validation_score_quantiles=np.quantile(validation_scores,[0,.25,.5,.75,1]).tolist(),
+                training_region_counts=counts.tolist(),
+                checkpoint_region_counts=np.bincount(target[valid],minlength=2).tolist())
             telemetry.append(dict(epoch=epoch+1, checkpoint_reason='objective_improved' if improved else 'no_improvement', **detail))
         if improved:
             best, state, stale = objective, copy.deepcopy(model.state_dict()), 0
@@ -182,7 +166,7 @@ def verified_data(protocol):
 
 def reload_scores(folder, metadata, data):
     with np.load(folder/'preprocessing.npz', allow_pickle=False) as p:
-        x = apply_preprocessing(data, p, metadata['include_mass'])
+        x = apply_preprocessing(data, p, metadata['include_mass'], metadata['transform'])
     if metadata['model'] == 'mass_gbdt':
         model = joblib.load(folder/'model.joblib')
     else:
@@ -223,6 +207,10 @@ def synthetic_data(events=2400):
                 jet_mass=rng.uniform(10, 300, (len(mass), 2)))
 
 
+def execution_config(args):
+    return {k:v for k,v in vars(args).items() if k not in ('output','cache_receipt','data','cache_dir','development_declaration')}
+
+
 def run_study(args):
     execution_source = source_identity()
     torch.set_num_threads(args.threads)
@@ -252,13 +240,24 @@ def run_study(args):
         for fraction in args.fractions:
             for name, offset in [('training', 0), ('checkpoint', 1)]:
                 inject(roles[name], data['truth'], region(data['mass']), fraction, seed+offset)
-    config = {k: v for k, v in vars(args).items() if k not in ('output', 'cache_receipt', 'data', 'cache_dir')}
-    frozen = dict(version=2, config=config, dataset_sha256=dataset_hash, cache_sha256=receipt['sha256'],
+    config = execution_config(args)
+    declaration_id=None
+    if args.development_declaration is not None:
+        declaration=read_json(args.development_declaration)
+        rule=declaration['protocol']
+        if (declaration['declaration_id'] != identity(rule) or rule['dataset_sha256'] != dataset_hash
+                or rule['source'] != execution_source or rule['environment'] != environment(args.device)
+                or args.transform not in rule['variants'] or config != dict(rule['base_config'],transform=args.transform)
+                or output != Path(rule['locations'][args.transform]['run']).resolve()):
+            raise ValueError('Run does not match its predeclared development comparison')
+        declaration_id=declaration['declaration_id']
+    frozen = dict(version=2, development_declaration_id=declaration_id, ledger_path=None if args.smoke else str(ledger_path.resolve()), config=config, dataset_sha256=dataset_hash, cache_sha256=receipt['sha256'],
                   cache_metadata=receipt['metadata'], split_sha256=identity(manifest),
                   source=execution_source, environment=environment(args.device), expected_fits=expected,
                   metric_version='v2-strict-cut-base2-js', bins=BINS.tolist(),
                   thresholds='strict score > linear calibration quantile', cuts=list(CUTS),
                   minimum_support=dict(correlation=4, closure_bin=5, closure_sr=20),
+                  closure=dict(replicates=args.closure_replicates,seed_offset=889,invalid_rule='any invalid replicate makes residual interval unavailable',fit='sideband-only linear efficiency'),
                   bootstrap=dict(replicates=300, seed=773, invalid_rule='any invalid replicate makes interval unavailable'),
                   interpretation='SYNTHETIC SMOKE' if args.smoke else 'Exploratory development; prior dataset exposure is not fully known',
                   lambda_history='0.003 informed by earlier inspected results; no retrospective preselection claim')
@@ -296,14 +295,14 @@ def run_study(args):
                     directory = output/'fits'/key
                     if (directory/'complete.json').exists():
                         marker = verify(directory, run_id)
-                        if marker['metadata'] != dict(seed=seed, fraction=fraction, model=name, mode=mode, strength=strength, include_mass=include_mass):
+                        if marker['metadata'] != dict(seed=seed, fraction=fraction, model=name, mode=mode, strength=strength, include_mass=include_mass, transform=args.transform):
                             raise ValueError('Fit metadata mismatch')
                         records.extend(read_json(directory/'metrics.json'))
                         continue
                     print(f'Train {key} on {"cpu (scikit-learn)" if name == "mass_gbdt" else args.device}', flush=True)
                     temp = Path(tempfile.mkdtemp(dir=output/'fits', prefix='.'+key))
                     try:
-                        x, preprocessing, tails = prepare(data, train, include_mass)
+                        x, preprocessing, tails = prepare(data, train, include_mass, args.transform)
                         if name == 'mass_gbdt':
                             target = region(data['mass'])[train]
                             counts = np.bincount(target, minlength=2)
@@ -333,12 +332,25 @@ def run_study(args):
                                 row = dict(seed=seed, fraction=fraction, model=name, strength=strength, cut=cut,
                                            split=role, threshold=threshold, nominal_calibration_acceptance=cut,
                                            calibration_interpretation='in_sample_diagnostic')
-                                row.update(metrics_for(data, roles[role], scores[role], threshold, seed+300, args.permutations))
+                                row.update(metrics_for(data,roles[role],scores[role],threshold,seed+300,args.permutations,
+                                    calibration=dict(mass=data['mass'][roles['calibration']],truth=data['truth'][roles['calibration']],score=scores['calibration']),
+                                    cut=cut,closure_replicates=args.closure_replicates,same_sample=role == 'calibration'))
                                 run_records.append(row)
                         np.savez_compressed(temp/'predictions.npz', **saved)
                         atomic_json(temp/'thresholds.json', thresholds)
                         atomic_json(temp/'metrics.json', run_records)
-                        metadata = dict(seed=seed, fraction=fraction, model=name, mode=mode, strength=strength, include_mass=include_mass)
+                        metadata = dict(seed=seed, fraction=fraction, model=name, mode=mode, strength=strength, include_mass=include_mass, transform=args.transform)
+                        # Validate serialization and inference before writing the completion marker.
+                        if read_json(temp/'metrics.json') != run_records or read_json(temp/'thresholds.json') != thresholds:
+                            raise ValueError('Serialized metric/threshold round trip failed')
+                        with np.load(temp/'predictions.npz',allow_pickle=False) as serialized_predictions:
+                            for role in ('calibration','tuning'):
+                                if not np.array_equal(serialized_predictions[role+'_row'],data['row'][roles[role]]) or not np.array_equal(serialized_predictions[role+'_score'],scores[role]):
+                                    raise ValueError('Serialized prediction round trip failed')
+                                chosen=roles[role][:32]
+                                reloaded=reload_scores(temp,metadata,{k:v[chosen] for k,v in data.items()})
+                                if not np.allclose(reloaded,scores[role][:32],atol=2e-6,rtol=0):
+                                    raise ValueError('Model/preprocessing round trip failed before completion')
                         if source_identity() != execution_source:
                             raise ValueError('Source changed during fit; refuse completion')
                         complete(temp, run_id, metadata)
@@ -382,9 +394,12 @@ def parser():
     p.add_argument('--fractions', type=float, nargs='+', default=[0., .005, .01])
     p.add_argument('--lambdas', type=float, nargs='+', default=[.003])
     p.add_argument('--permutations', type=int, default=199)
+    p.add_argument('--closure-replicates',type=int,default=199)
     p.add_argument('--threads', type=int, default=2)
     p.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='cuda')
     p.add_argument('--telemetry', action='store_true')
+    p.add_argument('--transform', choices=VARIANTS, default=BASELINE_TRANSFORM)
+    p.add_argument('--development-declaration',type=Path)
     p.add_argument('--smoke', action='store_true', help='Explicit SYNTHETIC fixture; barred from scientific reporting')
     p.add_argument('--output', type=Path, required=True)
     return p
@@ -393,7 +408,7 @@ def parser():
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
-    if (min(args.events, args.chunk_size, args.degree, args.epochs, args.permutations, args.threads) <= 0
+    if (min(args.events, args.chunk_size, args.degree, args.epochs, args.permutations, args.closure_replicates, args.threads) <= 0
             or len(set(args.seeds)) != len(args.seeds) or len(set(args.fractions)) != len(args.fractions)
             or args.lambdas != [.003] or any(not 0 <= f < 1 for f in args.fractions)):
         p.error('Positive counts, unique seeds/fractions, valid fractions, and prescribed --lambdas 0.003 required')

@@ -1,0 +1,113 @@
+{
+  "artifact": "output/v21_historical_exposure_inventory_final.json",
+  "bundles": [
+    {
+      "bundle": "results_linux",
+      "exposures": {
+        "checkpoint": {
+          "count": 33093,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "925bb62a5c2a41015f5fe45a703905393114f26f13d77088a49fdee23dff3b9e"
+        },
+        "checkpoint_and_exploratory_evaluation": {
+          "count": 41990,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "7d0e8314b9efe361db9ad19fb6a3dcf857504bd6719336477e5919f1e6fb0aae"
+        },
+        "exploratory_evaluation": {
+          "count": 78386,
+          "maximum": 299994,
+          "minimum": 1,
+          "row_ids_sha256": "0ee121ac4a45860e541167292990e9f20e00392cee8f4c8ddeb42de0d48f13e4"
+        },
+        "training": {
+          "count": 43953,
+          "maximum": 199998,
+          "minimum": 1,
+          "row_ids_sha256": "888ec7ca892cd4c9f43a6404ecd835a1161a64aa97c2d389ec7e91770ccab9be"
+        }
+      },
+      "files": 550,
+      "raw_content_identity": "unavailable_in_legacy_manifests",
+      "status": "inventoried"
+    },
+    {
+      "bundle": "results_linux_new",
+      "exposures": {
+        "checkpoint": {
+          "count": 33093,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "925bb62a5c2a41015f5fe45a703905393114f26f13d77088a49fdee23dff3b9e"
+        },
+        "checkpoint_and_exploratory_evaluation": {
+          "count": 41990,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "7d0e8314b9efe361db9ad19fb6a3dcf857504bd6719336477e5919f1e6fb0aae"
+        },
+        "exploratory_evaluation": {
+          "count": 78386,
+          "maximum": 299994,
+          "minimum": 1,
+          "row_ids_sha256": "0ee121ac4a45860e541167292990e9f20e00392cee8f4c8ddeb42de0d48f13e4"
+        },
+        "training": {
+          "count": 43953,
+          "maximum": 199998,
+          "minimum": 1,
+          "row_ids_sha256": "888ec7ca892cd4c9f43a6404ecd835a1161a64aa97c2d389ec7e91770ccab9be"
+        }
+      },
+      "files": 430,
+      "raw_content_identity": "unavailable_in_legacy_manifests",
+      "status": "inventoried"
+    },
+    {
+      "bundle": "reproducible_demo",
+      "exposures": {
+        "checkpoint": {
+          "count": 25091,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "7cf559ae4cec9719fcccea2cde44a0c374ef385e5c1cb8c0a2a25f0c966da34d"
+        },
+        "checkpoint_and_exploratory_evaluation": {
+          "count": 31404,
+          "maximum": 199997,
+          "minimum": 1,
+          "row_ids_sha256": "f3c8a74e02900a42c1ce22571cd0c6175b4fc5b1fcf08ae5b6bb46a4236f7f87"
+        },
+        "exploratory_evaluation": {
+          "count": 77233,
+          "maximum": 299994,
+          "minimum": 1,
+          "row_ids_sha256": "9b4356dca9818ae8babb30677a5ae654087340fc13902792e027d35f5ba9d0fb"
+        },
+        "training": {
+          "count": 43002,
+          "maximum": 199998,
+          "minimum": 1,
+          "row_ids_sha256": "7f1dcbc75e6e081e1e2d4e4c1f4c57735e1ced88c0d35a3c083dc2d7109041c8"
+        }
+      },
+      "files": 104,
+      "raw_content_identity": "unavailable_in_legacy_manifests",
+      "status": "inventoried"
+    }
+  ],
+  "conservative_manual_derived_inspection_range": [
+    0,
+    300000
+  ],
+  "current_dataset_sha256": "9c10ed6d17fea860e066fb8e68537810643322557c3cbe51d7a2f2829880bada",
+  "history": "unknown",
+  "known_confirmation_raw_range": [
+    200000,
+    300000
+  ],
+  "limitation": "Legacy selected row IDs establish reported use; unseen ranges and unrecorded manual accesses remain unknown. Current data hash does not retroactively certify legacy source identity.",
+  "sha256": "6327b5703dbe65508199c15a1ee226fa4b888bb0c44e5a4bfb5b55725f4e7d8e"
+}

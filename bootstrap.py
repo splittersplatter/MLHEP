@@ -14,6 +14,16 @@ def measures(mass, truth, selected):
 
 
 def paired(mass, truth, decisions, seeds, replicates=300, seed=773):
+    from metrics import validate
+    mass,truth,_ = validate(mass,truth,np.zeros(len(mass)))
+    if not seeds or len(set(seeds)) != len(seeds) or replicates < 1:
+        raise ValueError('Nonempty unique seed list and positive bootstrap count required')
+    expected={(s,m) for s in seeds for m in (BASELINE,DISCO)}
+    if not expected <= set(decisions):
+        raise ValueError('Missing paired bootstrap decisions')
+    for key,values in decisions.items():
+        if np.asarray(values).shape != mass.shape or np.asarray(values).dtype != np.dtype(bool):
+            raise ValueError('Unaligned or nonboolean bootstrap decisions')
     def point(ids):
         means = []
         for model in (BASELINE, DISCO):

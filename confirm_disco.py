@@ -116,10 +116,13 @@ def evaluate(run, frozen_path, output, independent=False, ledger_path=None):
                         metadata = verify(folder, protocol['run_id'])['metadata']
                         score = load_model(folder, metadata, data)
                         cuts = read_json(folder/'thresholds.json')
+                        with np.load(folder/'predictions.npz',allow_pickle=False) as saved:
+                            calibration={k:saved['calibration_'+k].copy() for k in ('mass','truth','score')}
                         for cut in frozen['cuts']:
                             threshold = cuts[str(cut)]
                             row = dict(seed=seed, fraction=fraction, model=name, cut=cut, split='final_replay' if not independent else 'final', threshold=threshold)
-                            row.update(metrics_for(data, np.arange(len(score)), score, threshold, seed+300, config['permutations']))
+                            row.update(metrics_for(data,np.arange(len(score)),score,threshold,seed+300,config['permutations'],
+                                calibration=calibration,cut=cut,closure_replicates=config['closure_replicates']))
                             records.append(row)
                         decisions[(seed, name)] = score > cuts['0.05']
                         np.savez_compressed(temporary/f'{fit_name(seed, fraction, name)}.npz', **data, score=score, threshold=cuts['0.05'])

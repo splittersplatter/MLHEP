@@ -36,11 +36,13 @@ def validate(mass, truth, score):
 
 def calibrate(mass, score, cut, mode='sideband', truth=None):
     mass, score = np.asarray(mass), np.asarray(score)
-    if not 0 < cut < 1 or mass.shape != score.shape or mass.ndim != 1 or not np.isfinite(score).all():
+    if not 0 < cut < 1 or mass.shape != score.shape or mass.ndim != 1 or not np.isfinite(score).all() or not np.isfinite(mass).all() or ((mass < MASS_MIN)|(mass >= MASS_MAX)).any():
         raise ValueError('Invalid calibration inputs')
     if mode == 'sideband':
         mask = region(mass) == 0
     elif mode == 'simulation_sr_background' and truth is not None:
+        if np.asarray(truth).shape != mass.shape or not np.isin(truth,[0,1]).all():
+            raise ValueError('Invalid labeled SR calibration truth')
         mask = (region(mass) == 1) & (np.asarray(truth) == 0)
     else:
         raise ValueError('Unsupported calibration mode')
@@ -57,7 +59,7 @@ def js_stat(mass, selected, bins=BINS):
     return float(jensenshannon(base, accepted, base=2)**2)
 
 
-def metrics_for(data, ids, score, threshold, seed, permutations):
+def metrics_for(data, ids, score, threshold, seed, permutations, calibration=None, cut=None, closure_replicates=199, same_sample=False):
     mass, truth, score = validate(data['mass'][ids], data['truth'][ids], score)
     if not np.isfinite(threshold) or permutations < 1:
         raise ValueError('Invalid threshold or permutations')
@@ -103,6 +105,9 @@ def metrics_for(data, ids, score, threshold, seed, permutations):
                   counts=dict(total=len(mass), background=int(background.sum()), signal_sr=int(signal.sum())),
                   undefined_reasons=reasons, local=detail,
                   closure=closure(mass[background], selected[background]))
+    if calibration is not None:
+        from local_closure import calibrated_closure
+        result['closure_uncertainty'] = calibrated_closure(calibration,mass,truth,score,cut,closure_replicates,seed+889,same_sample)
     return result
 
 

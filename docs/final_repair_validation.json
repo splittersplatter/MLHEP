@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-18",
+  "extraction": {
+    "cache_sha256": "822902f13eef9a15909ceebd98e77d5835b3c51f24de4bdf0f4c61bb154d59f2",
+    "dataset_sha256": "9c10ed6d17fea860e066fb8e68537810643322557c3cbe51d7a2f2829880bada",
+    "receipt_path": "output/v21_full_extraction_receipt.json",
+    "receipt_sha256": "e7b89bd55c96462ea5ccea6e9ef8a556082441dcaeca5237499623ead5fa856c",
+    "requested_raw_rows": 200000,
+    "selected_events": 69698
+  },
+  "final_source_sha256": {
+    "artifacts.py": "0b4508d78f210b43a607b0fc469df0c4327fdc0f76f2d610a7e8350bc3ec8089",
+    "audit_predictions.py": "fb65a7597014476d67ee72ba2361d488ad364ddcfa9598c79d842861186154e8",
+    "bootstrap.py": "304faaf42ae0e2dbd1dd7fa169300bbb79288c848b64f854bef9c0c4ebcd4755",
+    "compare_development.py": "755033a11464f613e7e5b3ff4508f2ad06b58852808425630d4598b96327c53a",
+    "confirm_disco.py": "790e3765c4941e0710f7e46788c7daf65143dc5b71d2f046a0fe38916eb7a815",
+    "exposure.py": "82f5503ef27428991d5d306e6e5d655837675e5deef14a75856ca7e6270351e9",
+    "feature_tail_audit.py": "fc024da374652e8a45e9356920722409bd14730c3f9ed2f77f8fcb06c059c39d",
+    "inventory_history.py": "e6fb1d6ca68aa4360fe560b29aa1776716441a4535751f5a26a275163421606a",
+    "local_closure.py": "da4184889366dc5129a83ceb0ad2b3c2b7bf4e34e8eec6fe3f67f519d75299f0",
+    "metrics.py": "61e48f5b463805183f9347b61f1f9f5d78356c884274a91e716d218143829f08",
+    "phase1.py": "c33ad6d9a2c971856862ba87f5570c6a1273544970264a4ef83b7cd3dfab163a",
+    "preprocessing.py": "139fcd79f399f6082cf06bf7e828e5e57e7472aa5e8526efaaca9889861a25f7",
+    "protocol.py": "88cb7effab9a80e8932933dd735d882328f13335130d9acda7344264fc9c238b",
+    "provenance.py": "0e2f8ff3130db50b68ea13dac6ee2c085c1791d0aac822f1e787671c4dd3e068",
+    "report_study.py": "9db313f9c7f6e8ef8e86e3eac92037a68d9a08c264a795bc8d22ff2d3f5929f2",
+    "sculpting_diagnostics.py": "9df129dbdc0d18c7605cbcccfd0980e35355e8b9159ab984ad920be960e68fd4",
+    "splits.py": "ca542a873fe503b85ebaa5eb44e2ce56fd07be2fad0507d0ad80dbced0f9a0ea",
+    "study.py": "ce3f994ddebf5cefd5b5ba9b06e95b79622acec2a855e9781c216bea31e4da62",
+    "tune_disco.py": "701f275f6bf170eba1f79608eb6008a1f584661c7af2f4fbf49caa3329de11b1"
+  },
+  "full_studies_started": false,
+  "host_tests": {
+    "command": "python -m unittest discover -v",
+    "cuda_training_telemetry_and_cpu_reload": "passed",
+    "passed": 38,
+    "skipped": 0,
+    "tests": 38
+  },
+  "independent_confirmation": "Refused for unknown or reused history; none claimed",
+  "inventory_summary_sha256": "6a6aa0dd119a4caa2984e29375c86d2694f9720a41aa447a221912184bdf81dc",
+  "optimized_tests": {
+    "command": "python -O -m unittest test_integrity test_extraction test_audit_extensions -q",
+    "passed": 17,
+    "skip_reason": "CUDA unavailable inside sandbox; same CUDA test passes on host",
+    "skipped": 1,
+    "tests": 18
+  },
+  "real_final_scores_opened": false,
+  "scope": "Implementation and software verification; user will run complete studies"
+}

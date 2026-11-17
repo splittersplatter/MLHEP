@@ -55,6 +55,19 @@ class ExtractionChecks(unittest.TestCase):
             self.assertNotEqual(first['metadata']['dataset_sha256'], second['metadata']['dataset_sha256'])
             self.assertNotEqual(first['path'], second['path'])
 
+    def test_signed_fastjet_mass_roundoff_is_retained_but_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            _,args=self.fixture(root)
+            data=extract(args)
+            meta=args.cache_receipt['metadata']
+            data['jet_mass'][0,0]=-2.1579186437577746e-5
+            validate_features(data,meta)
+            self.assertLess(data['jet_mass'][0,0],0)
+            data['jet_mass'][0,0]=-.1
+            with self.assertRaises(ValueError):
+                validate_features(data,meta)
+
     def test_wrong_shapes_rows_and_truth_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

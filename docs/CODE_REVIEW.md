@@ -34,3 +34,20 @@ sample independence are disclosed limitations, not unsupported success claims.
 
 Standards: 1 hard finding and 2 heuristics addressed; Spec: 2 findings addressed.
 Worst defect on each axis was the exposure reservation race, now fixed.
+
+## Final extensions review
+
+Spec and Standards reviewers identified a hardcoded 1e-12 floor in raw-event
+auditing. It now derives and records the declared transform specification; a
+fixture between 1e-12 and 1e-10 verifies changed membership/counts. Spec also
+identified audit-output paths that could overwrite data/history. The new writers
+require new destinations and protect source/cache/history paths, with regression
+checks. Independent-audit coverage now includes Wilson intervals, conditional
+JS nulls, sideband fit covariance/residuals, calibration bootstrap, fixed-lambda
+and seed-omission ratios, and transform-comparison aggregates. Corruption tests
+prove the independent local audit rejects edited numerical output.
+
+Reviewers found train-only scaling, coupled calibration resampling, sideband-only
+fitting, declared comparison identities and precompletion reload checks coherent.
+No historical experiment artifacts were edited. Complete scientific studies are
+left to the user by explicit instruction; no favorable outcome is presumed.

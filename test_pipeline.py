@@ -21,7 +21,7 @@ class PipelineChecks(unittest.TestCase):
         cls.root = Path(cls.temporary.name)
         cls.run_dir = cls.root/'run'
         cls.args = parser().parse_args(['--smoke', '--output', str(cls.run_dir), '--epochs', '1', '--seeds', '11', '22',
-                                     '--fractions', '.005', '--permutations', '9', '--device', 'cpu', '--telemetry'])
+                                     '--fractions', '.005', '--permutations', '9', '--closure-replicates', '9', '--device', 'cpu', '--telemetry'])
         with contextlib.redirect_stdout(io.StringIO()):
             run_study(cls.args)
 

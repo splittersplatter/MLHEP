@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 SOURCE_FILES = ('phase1.py', 'study.py', 'splits.py', 'metrics.py', 'provenance.py',
                 'artifacts.py', 'exposure.py', 'confirm_disco.py', 'tune_disco.py',
-                'report_study.py', 'sculpting_diagnostics.py', 'local_closure.py', 'bootstrap.py', 'audit_predictions.py', 'protocol.py')
+                'report_study.py', 'sculpting_diagnostics.py', 'local_closure.py', 'bootstrap.py', 'audit_predictions.py', 'protocol.py', 'preprocessing.py', 'inventory_history.py', 'compare_development.py', 'feature_tail_audit.py')
 
 
 def read_json(path):
@@ -33,6 +33,11 @@ def encoded(value):
 
 def identity(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
+
+
+def stable_stat(path):
+    stat = Path(path).stat()
+    return stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,stat.st_ino
 
 
 def file_hash(path):

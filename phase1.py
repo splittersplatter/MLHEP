@@ -19,11 +19,11 @@ ROOT = Path(__file__).resolve().parent
 
 def extract(args):
     """Bounded raw-data memory; cache only compact observables and source row IDs."""
-    from provenance import file_hash, identity, atomic_json, read_json, environment
+    from provenance import file_hash, identity, atomic_json, read_json, environment, stable_stat
     from artifacts import writer_lock
     if args.events <= 0 or args.chunk_size <= 0 or args.degree <= 0:
         raise ValueError('Extraction counts and degree must be positive')
-    before = args.data.stat()
+    before = stable_stat(args.data)
     digest = file_hash(args.data)
     start_row = getattr(args, 'start_row', 0)
     with h5py.File(args.data, 'r') as handle:
@@ -33,9 +33,12 @@ def extract(args):
     if start_row < 0 or stop_row <= start_row:
         raise ValueError('Invalid raw row range')
     calculator = ef.EFPSet(f'd<={args.degree}', measure='hadr', beta=1., normed=True)
-    metadata = dict(feature_width=int(2*calculator.count()), version=3, dataset_sha256=digest, requested_range=[start_row, start_row+args.events],
+    array_dtypes={k:('int8' if k == 'truth' else 'int64' if k in ('row','constituents') else 'float64') for k in FEATURE_KEYS}
+    metadata = dict(array_dtypes=array_dtypes, feature_width=int(2*calculator.count()), version=3, dataset_sha256=digest, requested_range=[start_row, start_row+args.events],
                     actual_range=[start_row, stop_row], schema=schema, degree=args.degree,
                     feature_definition='ungroomed_antikt_R1_pt1200_mass_order_hadr_beta1_normed',
+                    signed_jet_mass_roundoff_min_gev=-1e-3,
+                    mass_transform='log1p(max(signed_mass_feature,0)); raw signed FastJet output retained',
                     extraction_sha256=file_hash(Path(__file__)),
                     dependencies=environment()['packages'])
     key = identity(metadata)
@@ -50,7 +53,7 @@ def extract(args):
                 raise ValueError('Embedded cache metadata mismatch')
             result = {k: saved[k] for k in FEATURE_KEYS}
         validate_features(result, metadata)
-        if args.data.stat() != before:
+        if stable_stat(args.data) != before:
             raise ValueError('Dataset changed during cache validation')
         args.cache_receipt = dict(metadata=metadata, sha256=record['sha256'], path=str(cache.resolve()))
         return result
@@ -107,9 +110,7 @@ def extract(args):
     result['row'] = result['row'].astype(np.int64)
     result['truth'] = result['truth'].astype(np.int8)
     validate_features(result, metadata)
-    after = args.data.stat()
-    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino) != (
-            after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino):
+    if stable_stat(args.data) != before:
         raise ValueError('Dataset changed during extraction; use a stable snapshot')
     cache.parent.mkdir(parents=True, exist_ok=True)
     with writer_lock(cache.parent / key):
@@ -129,8 +130,10 @@ def validate_features(data, metadata):
     n = len(data['mass'])
     if not n or any(len(data[k]) != n or not np.isfinite(data[k]).all() for k in FEATURE_KEYS):
         raise ValueError('Empty, unaligned or nonfinite features')
+    if any(str(data[k].dtype) != metadata['array_dtypes'][k] for k in FEATURE_KEYS):
+        raise ValueError('Feature array dtype differs from declared extraction schema')
     if (data['x'].ndim != 2 or data['x'].shape[1] != metadata['feature_width'] or (data['x'] < 0).any()
-            or data['jet_mass'].shape != (n, 2) or (data['jet_mass'] < 0).any()
+            or data['jet_mass'].shape != (n, 2) or (data['jet_mass'] < metadata['signed_jet_mass_roundoff_min_gev']).any()
             or data['mass'].shape != (n,) or data['truth'].shape != (n,)
             or not np.isin(data['truth'], [0, 1]).all()
             or ((data['mass'] < 3100) | (data['mass'] >= 3900)).any()):
@@ -145,6 +148,8 @@ def validate_features(data, metadata):
             raise ValueError(f'Invalid {name} shape')
     if (data['constituents'] < 1).any() or not np.issubdtype(data['constituents'].dtype, np.integer):
         raise ValueError('Invalid constituent multiplicities')
+    if (data['delta_eta'] < 0).any() or (data['delta_rapidity'] < 0).any():
+        raise ValueError('Negative angular separation')
     if (data['jet_pt'] <= 0).any() or data['delta_eta'].shape != (n,) or data['delta_rapidity'].shape != (n,):
         raise ValueError('Invalid jet kinematics')
 

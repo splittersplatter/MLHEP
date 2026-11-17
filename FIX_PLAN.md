@@ -418,3 +418,12 @@ Root training, provenance, splitting, metrics, assessment and reporting have sin
 been replaced by protocol v2. See `IMPLEMENTATION_STATUS.md` for the requirement
 mapping, executed checks and remaining scientific limits, and `README.md` for
 maintained commands. Historical experiment outputs have not been rewritten.
+
+## Final implementation handoff (18 November 2026)
+
+The maintained repairs, including calibration-aware closure, train-only transform
+variants and independent aggregate audits, are implemented and software-tested.
+The user explicitly requested that full studies be left for them to run.
+No complete 200k model study or independent final evaluation is claimed. See
+`IMPLEMENTATION_STATUS.md`, `docs/VALIDATION.md` and the GPU commands in `README.md`.
+Historical findings/results above retain their original interpretation.

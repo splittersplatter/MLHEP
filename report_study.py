@@ -33,6 +33,12 @@ def audit_run(run):
     run = Path(run)
     protocol = verify_run(run)
     frozen = protocol['identity']
+    import torch
+    from provenance import environment
+    torch.set_num_threads(frozen['config']['threads'])
+    audit_environment=environment('cpu')
+    if audit_environment['packages'] != frozen['environment']['packages'] or audit_environment['python'] != frozen['environment']['python']:
+        raise ValueError('Audit dependency/Python environment differs from recorded run')
     if frozen['source'] != source_identity():
         raise ValueError('Audit calculation source differs from saved run; use the retained source snapshot/environment')
     splits = read_json(run/'splits.json')
@@ -44,6 +50,8 @@ def audit_run(run):
         fingerprints[f'fits/{name}/complete.json'] = file_hash(directory/'complete.json')
         meta = marker['metadata']
         config = frozen['config']
+        if meta.get('transform') != config['transform']:
+            raise ValueError('Fit preprocessing protocol mismatch')
         if meta['seed'] not in config['seeds'] or meta['fraction'] not in config['fractions']:
             raise ValueError('Unexpected fit metadata')
         from study import fit_name, specifications, inject
@@ -78,7 +86,9 @@ def audit_run(run):
                     expected = dict(seed=meta['seed'], fraction=meta['fraction'], model=meta['model'], strength=meta['strength'],
                                     cut=cut, split=role, threshold=threshold, nominal_calibration_acceptance=cut,
                                     calibration_interpretation='in_sample_diagnostic')
-                    expected.update(metrics_for(data, np.arange(len(score)), score, threshold, meta['seed']+300, config['permutations']))
+                    expected.update(metrics_for(data,np.arange(len(score)),score,threshold,meta['seed']+300,config['permutations'],
+                        calibration=dict(mass=p['calibration_mass'],truth=p['calibration_truth'],score=p['calibration_score']),
+                        cut=cut,closure_replicates=config['closure_replicates'],same_sample=role == 'calibration'))
                     if not equal_calculation(row, expected):
                         raise ValueError(f'Saved metric recalculation failed: {name}/{role}/{cut}')
             all_records.extend(metrics)
@@ -109,7 +119,7 @@ def audit_run(run):
                     raise ValueError('CPU model reload differs from saved predictions')
     from audit_predictions import audit as independent_audit
     independent = independent_audit(run)
-    return dict(independent_calculation=independent, status='passed', run_id=protocol['run_id'], fits=len(frozen['expected_fits']),
+    return dict(audit_environment=audit_environment, independent_calculation=independent, status='passed', run_id=protocol['run_id'], fits=len(frozen['expected_fits']),
                 metric_records=len(all_records), input_sha256=fingerprints,
                 tolerance=dict(rtol=1e-10, atol=1e-12), limitation='Content and arithmetic audit; not certification of unknown exposure or simulator correctness')
 
@@ -126,6 +136,8 @@ def render(run, output, diagnostic=False):
     rows = read_json(run/'results/metrics.json')
     from tune_disco import assess
     assessment = assess(run)
+    from audit_predictions import audit_assessment
+    audit_assessment(assessment,rows,protocol["identity"]["config"])
     label = 'SYNTHETIC SOFTWARE CHECK — NOT PHYSICS RESULTS' if diagnostic else protocol['identity']['interpretation']
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(dir=output.parent, prefix='.'+output.name))
@@ -165,13 +177,13 @@ def render(run, output, diagnostic=False):
         verdict = 'Fixed-lambda point targets met on tuning data.' if assessment['targets_met'] else 'Fixed-lambda point targets not established on tuning data.'
         details = []
         for row in rows:
-            details.append(f'<details><summary>{esc(row["model"])} seed {row["seed"]}, f={row["fraction"]}, {row["split"]}, cut={row["cut"]}</summary><pre>{esc(__import__("json").dumps(dict(local=row["local"], closure=row["closure"], undefined_reasons=row["undefined_reasons"]), indent=2, allow_nan=False))}</pre></details>')
+            details.append(f'<details><summary>{esc(row["model"])} seed {row["seed"]}, f={row["fraction"]}, {row["split"]}, cut={row["cut"]}</summary><pre>{esc(__import__("json").dumps(dict(local=row["local"], closure=row["closure"], closure_uncertainty=row.get("closure_uncertainty"), undefined_reasons=row["undefined_reasons"]), indent=2, allow_nan=False))}</pre></details>')
         content = f'''<!doctype html><html><head><meta charset="utf-8"><title>MLHEP {esc(label)}</title>
 <style>body{{font:16px system-ui;margin:2rem;max-width:1300px}}table{{border-collapse:collapse;font-size:12px}}td,th{{padding:6px;border:1px solid #bbb}}img{{max-width:100%}}pre{{white-space:pre-wrap}}.notice{{background:#fff0cd;padding:1rem}}</style></head><body>
 <h1>{esc(label)}</h1><p>Run ID: <code>{protocol['run_id']}</code></p>
 <p class="notice">{esc(verdict)} This is an exploratory comparison. Calibration acceptance is an in-sample diagnostic. The dataset has unknown prior exposures beyond documented uses. Previously evaluated raw rows 200000–299999 are exploratory. No independent confirmation is claimed.</p>
 <p>Audit: {audit['fits']} verified unique fits, {audit['metric_records']} metric records. Every configured seed is included. Acceptance uses strict score &gt; cut, linear calibration quantiles and base-2 JS. Undefined values remain unavailable. Bar widths show training-seed SD, not independent-event uncertainty.</p>
-<p>SR/SB ratios can reflect a smooth trend; neither those ratios nor a global JS reduction establish a localized excess or removal of mass sculpting. Closure is a descriptive sideband-only linear interpolation conditional on the threshold; calibration uncertainty and a validated background fit remain required for physics claims.</p>
+<p>SR/SB ratios can reflect a smooth trend; neither those ratios nor a global JS reduction establish a localized excess or removal of mass sculpting. Closure uses a sideband-only linear interpolation, with empirical calibration and evaluation resampling reported per seed. These conditional diagnostics and toy controls do not replace a validated discovery background fit.</p>
 <h2>Every seed and operating point</h2>{table}<h2>Fixed-lambda assessment and seed influence</h2><pre>{esc(__import__('json').dumps(assessment, indent=2, allow_nan=False))}</pre>
 <h2>Background efficiency</h2>{''.join(f'<img src="{name}" alt="Background efficiency by mass">' for name in images)}
 <h2>Per-seed local counts, intervals and closure</h2>{''.join(details)}
@@ -223,6 +235,16 @@ def render_evaluation(run, evaluation, output, diagnostic=False):
             for field in ('row','mass','truth'):
                 if not np.array_equal(p[field],data[field][selected]):
                     raise ValueError('Evaluation differs from exact reserved sample or event contents')
+    # Recompute closure uncertainty against the frozen calibration predictions too.
+    for row in rows:
+        name=f'seed{row["seed"]}_f{row["fraction"]:g}_{row["model"]}'
+        with np.load(evaluation/(name+'.npz'),allow_pickle=False) as saved, np.load(run/'fits'/name/'predictions.npz',allow_pickle=False) as calibration:
+            event=dict(mass=saved['mass'],truth=saved['truth'])
+            expected=metrics_for(event,np.arange(len(saved['score'])),saved['score'],row['threshold'],row['seed']+300,
+                protocol['identity']['config']['permutations'],calibration={k:calibration['calibration_'+k] for k in ('mass','truth','score')},
+                cut=row['cut'],closure_replicates=protocol['identity']['config']['closure_replicates'])
+            if not equal_calculation(row['closure_uncertainty'],expected['closure_uncertainty']):
+                raise ValueError('Evaluation closure uncertainty recalculation mismatch')
     if output.exists():
         raise ValueError('Output exists; choose a new report directory')
     interpretation = read_json(evaluation/'interpretation.json')

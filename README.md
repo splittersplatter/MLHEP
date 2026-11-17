@@ -14,7 +14,7 @@ Use a project-local Python 3.12 environment with `requirements-study.txt`.
 The maintained launcher accepts `PYTHON_BIN`; it contains no path into another
 project and does not install or upgrade dependencies. Actual versions, device,
 CUDA runtime, GPU name, thread count and deterministic settings are recorded in
-every run. The lock file records the environment used during this implementation;
+every run. Pinned requirements record the environment used during this implementation;
 CUDA wheels/drivers must be compatible with the host.
 
 ```bash
@@ -59,9 +59,10 @@ reserved final role. Reserving events now does not erase prior exposure.
 Dataset SHA-256, requested/actual raw range, HDF5 schema, feature width,
 extraction source and dependency versions identify schema-v3 caches. Old caches
 are never silently trusted. New extraction also saves constituent counts,
-jet pT/eta/rapidity and angular separations. No four-constituent veto, grooming,
-angular cut or altered transform is introduced. Such physics changes require
-new declared protocols, caches and comparisons.
+jet pT/eta/rapidity and angular separations. The baseline retains the 1e-12 EFP log floor and train-fit mean/std scaling.
+Optional predeclared floor/robust-scaling variants are described below. No
+four-constituent veto, grooming or angular cut is imposed; physics changes
+require new declared protocols, caches and comparisons.
 
 Run identity includes configuration, source, cache, splits and environment.
 Each fit has checksummed model, preprocessing, predictions, thresholds,
@@ -83,7 +84,9 @@ lock belonging to a running process.
 Reports verify source snapshots, every expected fit, exact sample membership,
 calibration cuts and numerical metrics before writing output. An independent
 NumPy/rank-sum calculation checks thresholds, AUC, efficiencies, SIC, JS,
-permutations, dCor and local counts. All seeds/cuts appear; incomplete or
+permutations, dCor, local counts, Wilson intervals, conditional JS references
+and closure/calibration bootstrap. Fixed-lambda and transform comparisons also
+have independent aggregate and seed-influence checks. All seeds/cuts appear; incomplete or
 undefined comparisons cannot qualify. Fixed-lambda assessment references the
 existing study fits with zero new fits and reports leave-one-seed-out influence.
 Figures and HTML are published together via an atomic directory rename, with
@@ -95,9 +98,12 @@ JS also has an undefined permutation p-value. Base-2 JS, linear quantiles,
 16 mass bins and strict selection are versioned. Local region efficiencies,
 Wilson intervals, actual/nominal acceptance, score spread and fixed-count JS
 references accompany every seed/cut/model. Sideband-only linear closure is
-**descriptive**, conditional on the threshold, and does not include calibration
-uncertainty. It cannot establish removal of fake resonances or a discovery
-significance. Such claims require a separately validated fit and controls.
+**descriptive**. Its point-fit error conditions on the threshold; the accompanying
+empirical bootstrap resamples calibration events, re-estimates the sideband cut
+and refits evaluation sidebands to propagate calibration/evaluation uncertainty.
+In-sample calibration draws remain coupled. Invalid replicates make the interval
+unavailable. Synthetic flat/slope/localized-step controls check this software;
+they do not establish physical-model coverage or a discovery significance.
 
 ## Freeze and reserved-event evaluation
 
@@ -128,8 +134,8 @@ simulation check would still not validate independent generator systematics.
 ## Software validation
 
 ```bash
-.venv/bin/python -m unittest test_study test_sculpting_diagnostics test_integrity test_extraction test_pipeline -v
-.venv/bin/python -O -m unittest test_integrity test_extraction -v
+.venv/bin/python -m unittest test_study test_sculpting_diagnostics test_integrity test_extraction test_pipeline test_preprocessing_closure test_development_comparison test_audit_extensions -v
+.venv/bin/python -O -m unittest test_integrity test_extraction test_audit_extensions -v
 .venv/bin/python study.py --smoke --device cuda --epochs 2 --seeds 11 22 --fractions .005 .01 --permutations 19 --telemetry --output /tmp/MLHEP_SYNTHETIC_smoke
 .venv/bin/python report_study.py --run /tmp/MLHEP_SYNTHETIC_smoke --diagnostic --output /tmp/MLHEP_SYNTHETIC_report
 ```
@@ -141,3 +147,47 @@ locks, strict JSON, ties, missing classes, empty bins, undefined bootstrap,
 sideband-only interpolation and telemetry invariance. The CUDA test runs when
 host GPU access is available. See the implementation status for actual executed
 checks and limitations rather than inferring physics success from software tests.
+
+## Full studies to run yourself
+
+At your request, the complete studies are left unrun. The 200,000-row schema-v3
+extraction is available locally (69,698 selected events); training checks content
+and schema before reusing it. Earlier limited 10k development results retain
+their original source snapshots and must not be resumed under changed source.
+Use fresh output directories for this version.
+
+For the baseline only, use the GPU launcher command above. For the full
+predeclared three-transform robustness comparison, freeze the declaration before
+training, then run every variant sequentially on CUDA:
+
+```bash
+export PYTHON_BIN=.venv/bin/python
+DATA_SHA256=9c10ed6d17fea860e066fb8e68537810643322557c3cbe51d7a2f2829880bada
+"$PYTHON_BIN" compare_development.py declare \
+  --dataset-sha256 "$DATA_SHA256" --output output/v21_development_declaration.json
+for transform in log_floor_1e-12 log_floor_1e-10 robust_floor_1e-12; do
+  "$PYTHON_BIN" study.py --device cuda --telemetry --transform "$transform" \
+    --development-declaration output/v21_development_declaration.json \
+    --output "results_v21_development_200k_$transform"
+  "$PYTHON_BIN" report_study.py --run "results_v21_development_200k_$transform" \
+    --output "output/v21_development_200k_${transform}_report"
+  "$PYTHON_BIN" feature_tail_audit.py --run "results_v21_development_200k_$transform" \
+    --data events_anomalydetection.h5 --output "output/v21_floor_${transform}.json"
+done
+"$PYTHON_BIN" compare_development.py compare \
+  --declaration output/v21_development_declaration.json \
+  --output output/v21_preprocessing_comparison
+```
+
+The hash shown is this workspace's verified raw dataset. For another dataset,
+compute its full SHA-256 and use that digest. The declaration pins the source,
+environment, exact output locations and all settings; keep those unchanged
+through training/reporting/resume. A changed declaration needs a distinct
+protocol and new locations. Each variant has 45 unique fits (MLPs use GPU;
+GBDT uses CPU). All seeds/fractions and unavailable or failing outcomes are
+retained. Comparison does not select a winning transform.
+
+Raw floor auditing reads only the union of injected training rows and uses
+the declared floor. Historical exposure inventory is summarized in
+`docs/historical_exposure_summary.json`; missing legacy raw identity stays
+unknown. No independent final evaluation is authorized by that inventory.

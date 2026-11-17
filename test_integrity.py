@@ -183,6 +183,20 @@ class IntegrityChecks(unittest.TestCase):
         self.assertTrue(np.allclose(score_model(b, x), expected, atol=2e-6, rtol=0))
         self.assertTrue(telemetry)
 
+    def test_tuning_and_final_inputs_cannot_change_checkpoint(self):
+        roles=indices(self.data,self.manifest,11)
+        train=roles['training'][self.data['truth'][roles['training']] == 0]
+        valid=roles['checkpoint'][self.data['truth'][roles['checkpoint']] == 0]
+        x,_,_=prepare(self.data,train,True)
+        args=SimpleNamespace(epochs=2,telemetry=False,device='cpu')
+        first,history,_=train_mlp(x,self.data,train,valid,11,'sideband',.003,args)
+        changed=x.copy()
+        changed[np.concatenate([roles['tuning'],roles['final']])]*=100
+        second,other_history,_=train_mlp(changed,self.data,train,valid,11,'sideband',.003,args)
+        self.assertEqual(history,other_history)
+        for key,value in first.state_dict().items():
+            self.assertTrue(torch.equal(value,second.state_dict()[key]))
+
     def test_unknown_and_reused_exposure_never_independent(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'ledger.json'

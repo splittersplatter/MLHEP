@@ -50,6 +50,8 @@ def verify(directory, run_id=None):
 def verify_run(run):
     run = Path(run)
     protocol = read_json(run / 'protocol.json')
+    if not protocol['identity']['config']['smoke'] and protocol.get('ledger_path') != protocol['identity'].get('ledger_path'):
+        raise ValueError('Canonical dataset exposure ledger changed')
     if identity(protocol['identity']) != protocol['run_id']:
         raise ValueError('Invalid run protocol identity')
     from provenance import verify_sources

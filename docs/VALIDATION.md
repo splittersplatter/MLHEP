@@ -49,3 +49,31 @@ HTML was inspected in the in-app browser and figures checked locally. The report
 shows unavailable values and failure to establish all tuning targets; no success
 or independence claim was manufactured. Read these results as a pipeline and
 limited development check, not as the complete physics study.
+
+## Final software verification and handoff
+
+The final host suite `python -m unittest discover -v` passed all **38 tests**,
+with no skips, including GPU training, identical telemetry-enabled GPU outputs
+and CPU reload. The optimized-Python integrity/extraction/audit suite passed
+17 tests with one sandbox CUDA skip (18 total); that GPU case passed in the host
+suite. New tests exercise declared floor membership, input/history preservation,
+independent Wilson/JS/closure-bootstrap corruption rejection, train-only robust
+scaling, shared declared transforms, and tuning/final checkpoint invariance.
+
+Full source-backed extraction of raw rows 0:200000 completed with 69,698 selected
+events and a versioned schema/content receipt. It retained a tiny signed FastJet
+mass under the explicit roundoff bound; materially negative values reject.
+Historical inventory covers 550, 430 and 104 files in the three bundles and
+records reported role use plus conservative derived-artifact inspection. It
+retains unknown historical source/exposure status. The full generated inventory
+is under output/; docs/historical_exposure_summary.json records its digest.
+
+**No complete 200k training study was started.** The user explicitly requested
+that complete studies be run by them. README.md provides the baseline GPU command
+and the predeclared three-transform loop. Scientific outcomes of the final source
+remain unmeasured. Earlier 10k results are preserved under their original source.
+No real final-role scores were opened. Software/review checks do not establish
+unused-sample provenance, physical-model coverage or removal of mass sculpting.
+
+Machine-readable final evidence: final_repair_validation.json. `git diff --check`
+passes. Code review findings and their fixes are in CODE_REVIEW.md.
